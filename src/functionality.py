@@ -74,7 +74,7 @@ class PacketCapture:
         self.packets = rdpcap(filename)
 
     def save_to_csv(self, filename):
-        """Save captured packets to a CSV file."""
+        #Save captured packets to a CSV file.
         with open(filename, mode="w", newline="") as file:
             writer = csv.writer(file)
             writer.writerow(["Source IP", "Destination IP", "Protocol"])
@@ -90,7 +90,7 @@ class PacketCapture:
         self.packets = []
         with open(filename, mode="r") as file:
             reader = csv.reader(file)
-            next(reader)  # Skip header
+            next(reader)  
             for row in reader:
                 # CSV loading is not supported for raw packets
                 pass

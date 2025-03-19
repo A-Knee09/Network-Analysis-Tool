@@ -9,9 +9,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 import ctypes
-from scapy.all import IP, TCP, UDP  # Ensure Scapy imports are correct
+from scapy.all import IP, TCP, UDP  
 
-# Enable high-DPI awareness on Windows
+# For some reason the resolution for everything was pretty low so the try block is for that
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1)
 except:
@@ -24,31 +24,29 @@ class NetworkAnalysisTool:
         self.root.title("Real-Time Network Analysis Tool")
         self.style = Style(theme="minty")
 
-        # Set the window size and make it resizable
+    
         self.root.geometry("1200x600")
         self.root.minsize(800, 400)
 
-        # Initialize packet capture
+        # packet capture initializes yaha se
         self.packet_capture = PacketCapture()
 
-        # Apply custom styles
+        # I added two styles which can be toggled 
         configure_treeview_style(self.style)
 
-        # Create a top bar for progress and status
+        # This one is a progress bar I've made , isnt very accurate but it looks clean :D
         self.top_bar = ttk.Frame(root)
         self.top_bar.pack(fill=tk.X, pady=5)
-
-        # Progress bar
         self.progress = ttk.Progressbar(self.top_bar, orient="horizontal", mode="indeterminate")
         self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-        # Status bar
+        # Next to progress bar theres text that tells you if the tool is ready or in progress 
         self.status_var = tk.StringVar()
         self.status_var.set("Ready")
         self.status_bar = ttk.Label(self.top_bar, textvariable=self.status_var)
         self.status_bar.pack(side=tk.LEFT, padx=5)
 
-        # Create a left sidebar for filter controls
+        # Created a left side bar for filtering controls , initially everything was on the same frame and didnt look clean
         self.sidebar = ttk.Frame(root)
         self.sidebar.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
 
@@ -73,11 +71,12 @@ class NetworkAnalysisTool:
         self.search_button = ttk.Button(self.sidebar, text="Search", command=self.search_packets)
         self.search_button.pack(pady=5)
 
-        # Create a main area for the packet table and statistics
+        # Created a main area for the packet table and statistics
         self.main_area = ttk.Frame(root)
         self.main_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Packet table with serial number column
+        # Packet table with serial number column. During making of this I felt theres needs to be some numbering since tkinter does not have a tabular cell border option.          so I decided to add this to keep track. Less painful to the eyes
+
         self.tree = ttk.Treeview(self.main_area, columns=("Serial", "Source IP", "Destination IP", "Protocol"), show="headings")
         self.tree.heading("Serial", text="Serial")
         self.tree.heading("Source IP", text="Source IP")
@@ -85,7 +84,7 @@ class NetworkAnalysisTool:
         self.tree.heading("Protocol", text="Protocol")
         self.tree.pack(fill=tk.BOTH, expand=True)
 
-        # Create a bottom bar for main controls
+        # Created a bottom bar for main controls
         self.bottom_bar = ttk.Frame(root)
         self.bottom_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
 
@@ -203,14 +202,15 @@ class NetworkAnalysisTool:
         details_text.insert(tk.END, packet.show(dump=True))
         details_text.config(state=tk.DISABLED)  # Make it read-only
 
-    def show_statistics(self):
+    # For some reason this stats feature isnt working , i'll try to fix it.
+    def show_statistics(self):  
         """Show advanced statistics using Plotly."""
         protocol_count = self.packet_capture.get_statistics()
 
-        # Create a DataFrame for statistics
+        # Created a DataFrame for statistics
         df = pd.DataFrame(list(protocol_count.items()), columns=["Protocol", "Count"])
 
-        # Create a Plotly figure
+        # Created a Plotly figure
         fig = make_subplots(rows=1, cols=2, specs=[[{"type": "bar"}, {"type": "pie"}]])
 
         # Bar chart

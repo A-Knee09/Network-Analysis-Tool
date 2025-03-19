@@ -1,3 +1,5 @@
+# To make things prettier :D
+
 from ttkbootstrap import Style
 
 
