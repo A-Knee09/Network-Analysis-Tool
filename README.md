@@ -1,33 +1,43 @@
-# Real-Time Network Analysis Tool
+# Network Analysis Tool
 
-A GUI-based network analysis tool for capturing, filtering, and analyzing network packets in real-time.
+A simple network analysis tool. This tool allows you to capture and analyze network traffic with support for dark and light modes. Its very early work in progress so please forgive the "amateurness" of this :D
 
-## Features
-- Real-time packet capture
-- Filter packets by protocol, IP, or port
-- View detailed packet information
-- Export statistics to PDF
-- Dark/Light mode toggle
+---
 
-## Installation
+## Screenshots
+
+### Dark Mode
+![dark-mode](https://github.com/user-attachments/assets/8f665908-9603-4c00-9928-7747434b9b69)
+
+
+
+### Light Mode
+![light-mode](https://github.com/user-attachments/assets/8925ee66-6e41-47e2-a444-80a3af62e0f4)
+
+
+
+### Start Capture
+![start-capture](https://github.com/user-attachments/assets/eb6fd17a-dd82-4352-b44d-a2607b556e63)
+
+
+---
+
+## How to Use
+
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/real-time-network-analysis-tool.git
+   git clone https://github.com/A-Knee09/Network-Analysis-Tool.git
    ```
-    Install dependencies:
-    ```bash
-    pip install -r requirements.txt
-    ```
-    Run the application:
-    ```bash
-    python main.py
-    ```
-Usage
+2. Install Dependencies
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Run the tool
+   ```bash
+   python main.py
+   ```
+4. Switch between dark/light mode in the settings.
 
-    Start capturing packets by clicking Start Capture.
-
-    Use the filter options to narrow down packets.
-
-    Click View Details to inspect a specific packet.
+4. Click Start Capture to begin analyzing network traffic.
 
 Made by Aknee :D
