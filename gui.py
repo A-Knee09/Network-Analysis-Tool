@@ -13,6 +13,8 @@ import pandas as pd
 import platform
 import time
 import random
+import tempfile
+import webbrowser
 from kamene.all import IP, TCP, UDP, ARP  # Updated to use kamene instead of scapy
 import traceback
 import logging
@@ -1073,6 +1075,12 @@ Payload Size: {payload} bytes
         protocol_frame = ttk.Frame(notebook)
         notebook.add(protocol_frame, text="Protocol Distribution")
         
+        # Add a label explaining statistics are being generated
+        ttk.Label(protocol_frame, text="Generating statistics visualization...", font=("Segoe UI", 12)).pack(pady=20)
+        
+        # Make sure protocol_frame is visible
+        protocol_frame.update()
+        
         # Get protocol statistics
         protocol_stats = self.packet_capture.get_statistics()
         protocols = list(protocol_stats.keys())
@@ -1091,25 +1099,28 @@ Payload Size: {payload} bytes
             height=500,
         )
         
-        # Convert to HTML
-        chart_html = fig.to_html(include_plotlyjs='cdn')
+        # Convert to PNG image data
+        import io
+        from PIL import Image, ImageTk
         
-        # Display in a webview or embedded browser if available
-        try:
-            import webview
-            # Save to temporary file
-            with open("temp_chart.html", "w") as f:
-                f.write(chart_html)
-            webview.create_window("Protocol Distribution", "temp_chart.html", width=700, height=500)
-            webview.start()
-        except ImportError:
-            # Alternative: open in default browser
-            import tempfile
-            with tempfile.NamedTemporaryFile('w', delete=False, suffix='.html') as f:
-                f.write(chart_html)
-                chart_path = f.name
-            import webbrowser
-            webbrowser.open('file://' + chart_path)
+        # Save the figure as a PNG image in memory
+        img_bytes = io.BytesIO()
+        fig.write_image(img_bytes, format="png", width=700, height=500)
+        img_bytes.seek(0)
+        
+        # Convert to PhotoImage for display in Tkinter
+        img = Image.open(img_bytes)
+        photo_img = ImageTk.PhotoImage(img)
+        
+        # Display the image in the protocol frame
+        # First clear any existing widgets
+        for widget in protocol_frame.winfo_children():
+            widget.destroy()
+        
+        # Create a label to display the image
+        img_label = ttk.Label(protocol_frame, image=photo_img)
+        img_label.image = photo_img  # Keep a reference to prevent garbage collection
+        img_label.pack(padx=10, pady=10, expand=True)
             
         # Traffic timeline frame (if we have enough data)
         if len(self.packet_capture.packets) > 10:
@@ -1144,20 +1155,23 @@ Payload Size: {payload} bytes
                 height=500
             )
             
-            # Save to HTML
-            time_html = fig2.to_html(include_plotlyjs='cdn')
+            # Save the figure as a PNG image in memory
+            time_img_bytes = io.BytesIO()
+            fig2.write_image(time_img_bytes, format="png", width=700, height=500)
+            time_img_bytes.seek(0)
             
-            # Display in browser
-            with tempfile.NamedTemporaryFile('w', delete=False, suffix='.html') as f:
-                f.write(time_html)
-                time_path = f.name
+            # Convert to PhotoImage for display in Tkinter
+            time_img = Image.open(time_img_bytes)
+            time_photo_img = ImageTk.PhotoImage(time_img)
             
-            # Add button to open
-            ttk.Button(
-                time_frame, 
-                text="View Timeline Chart",
-                command=lambda: webbrowser.open('file://' + time_path)
-            ).pack(pady=20)
+            # Clear any existing widgets in the time frame
+            for widget in time_frame.winfo_children():
+                widget.destroy()
+            
+            # Create a label to display the image
+            time_img_label = ttk.Label(time_frame, image=time_photo_img)
+            time_img_label.image = time_photo_img  # Keep a reference to prevent garbage collection
+            time_img_label.pack(padx=10, pady=10, expand=True)
                 
     def export_to_pdf(self):
         """Export statistics to a PDF report."""
@@ -1322,7 +1336,7 @@ Payload Size: {payload} bytes
         
     def on_closing(self):
         """Handle window closing."""
-        if self.is_capturing:
+        if hasattr(self, 'is_capturing') and self.is_capturing:
             if messagebox.askyesno("Quit", "A capture is in progress. Are you sure you want to quit?"):
                 self.stop_capture()
                 self.root.destroy()
