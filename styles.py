@@ -1,117 +1,112 @@
-from ttkbootstrap import Style, Colors
+"""
+Styles module for the Network Analysis Tool
+This module contains functions to control styling of the application
+"""
 
+import tkinter as tk
 
-def apply_dark_theme(style):
-    """Apply dark theme settings."""
-    style.theme_use("darkly")
+def apply_dark_theme(root):
+    """Apply dark theme to the application."""
+    bg_color = "#1a1a1a"
+    text_color = "#ffffff"
+    accent_color = "#3498db"
+    
+    root.configure(bg=bg_color)
+    
+    # Configure styles for widgets
+    style = root.tk_setPalette(
+        background=bg_color,
+        foreground=text_color,
+        activeBackground=accent_color,
+        activeForeground=text_color
+    )
+    
+    return style
 
-
-def apply_light_theme(style):
-    """Apply light theme settings."""
-    style.theme_use("minty")
-
+def apply_light_theme(root):
+    """Apply light theme to the application."""
+    bg_color = "#f9f9f9"
+    text_color = "#333333"
+    accent_color = "#3498db"
+    
+    root.configure(bg=bg_color)
+    
+    # Configure styles for widgets
+    style = root.tk_setPalette(
+        background=bg_color,
+        foreground=text_color,
+        activeBackground=accent_color,
+        activeForeground=text_color
+    )
+    
+    return style
 
 def configure_treeview_style(style):
-    """Configure styles for the treeview component."""
-    # Basic treeview style
+    """Configure style for ttk.Treeview widgets."""
+    # Get the current theme colors
+    colors = get_theme_colors(style.theme_use())
+    
+    # Configure the Treeview style
     style.configure(
-        "Treeview", 
-        font=("Segoe UI", 10), 
-        rowheight=28, 
-        fieldbackground=style.colors.inputbg
+        "Treeview",
+        background=colors["background"],
+        foreground=colors["text"],
+        fieldbackground=colors["background"]
     )
     
-    # Heading style
+    # Configure the Treeview heading style
     style.configure(
-        "Treeview.Heading", 
-        font=("Segoe UI", 10, "bold"),
-        padding=5,
-        background=style.colors.primary,
-        foreground=style.colors.bg
+        "Treeview.Heading",
+        background=colors["secondary"],
+        foreground=colors["text"],
+        relief="flat"
     )
     
-    # Selected item style
+    # Configure selection colors
     style.map(
         "Treeview",
-        background=[("selected", style.colors.selectbg)],
-        foreground=[("selected", style.colors.selectfg)]
+        background=[("selected", "#3498db")],
+        foreground=[("selected", "#ffffff")]
     )
-    
-    # Configure ttk button styles
-    style.configure("TButton", font=("Segoe UI", 10))
-    style.configure("TLabel", font=("Segoe UI", 10))
-    style.configure("TEntry", font=("Segoe UI", 10))
-    style.configure("TCombobox", font=("Segoe UI", 10))
-
 
 def get_theme_colors(theme_name):
-    """Get color values for the current theme."""
+    """Get color scheme for the current theme."""
     if theme_name == "darkly":
         return {
-            "background": "#222222",
-            "foreground": "#ffffff",
-            "primary": "#375a7f",
-            "secondary": "#444444",
-            "success": "#00bc8c",
-            "info": "#3498db",
-            "warning": "#f39c12",
-            "danger": "#e74c3c"
+            "background": "#1a1a1a",
+            "secondary": "#2a2a2a",
+            "text": "#ffffff",
+            "accent": "#3498db"
         }
-    else:  # minty or default
+    else:  # Light theme or any other
         return {
-            "background": "#ffffff",
-            "foreground": "#555555",
-            "primary": "#78c2ad",
-            "secondary": "#f3969a",
-            "success": "#56cc9d",
-            "info": "#6cc3d5",
-            "warning": "#ffce67",
-            "danger": "#ff7851"
+            "background": "#f8f9fa",
+            "secondary": "#e9ecef",
+            "text": "#212529",
+            "accent": "#3498db"
         }
 
-
-def create_custom_styles(style):
-    """Create additional custom styles for the application."""
-    # Custom button styles
-    style.configure(
-        "primary.TButton",
-        font=("Segoe UI", 10),
-        background=style.colors.primary,
-        foreground=style.colors.bg
-    )
+def get_protocol_color(protocol):
+    """Get color for the protocol."""
+    protocol_colors = {
+        "TCP": "#3498db",
+        "UDP": "#2ecc71",
+        "ICMP": "#e74c3c",
+        "ARP": "#f39c12",
+        "DNS": "#9b59b6",
+        "HTTP": "#1abc9c",
+        "HTTPS": "#16a085",
+        "TLS": "#27ae60",
+        "SSH": "#f1c40f",
+        "FTP": "#e67e22",
+        "SMTP": "#d35400",
+        "Other": "#95a5a6"
+    }
     
-    style.configure(
-        "success.TButton",
-        font=("Segoe UI", 10),
-        background=style.colors.success,
-        foreground=style.colors.bg
-    )
-    
-    style.configure(
-        "danger.TButton",
-        font=("Segoe UI", 10),
-        background=style.colors.danger,
-        foreground=style.colors.bg
-    )
-    
-    # Custom label styles
-    style.configure(
-        "title.TLabel",
-        font=("Segoe UI", 14, "bold"),
-        foreground=style.colors.primary
-    )
-    
-    style.configure(
-        "subtitle.TLabel",
-        font=("Segoe UI", 12),
-        foreground=style.colors.secondary
-    )
-    
-    # Custom frame styles
-    style.configure(
-        "card.TFrame",
-        background=style.colors.bg,
-        relief="raised",
-        borderwidth=1
-    )
-
+    # If protocol contains a known key, return that color
+    for key in protocol_colors:
+        if key in protocol:
+            return protocol_colors[key]
+            
+    # Default color
+    return protocol_colors["Other"]

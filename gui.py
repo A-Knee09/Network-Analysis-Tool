@@ -6,6 +6,9 @@ from utils import export_to_pdf, send_email
 import styles
 from styles import apply_dark_theme, apply_light_theme, configure_treeview_style, get_theme_colors
 from components import create_tooltip, StatusBar, InterfaceSelector, AboutDialog
+from dashboard.network_dashboard import NetworkDashboard
+from dashboard.statistics_dashboard import StatisticsDashboard
+from dashboard.device_dashboard import DeviceDashboard
 import threading
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -96,6 +99,9 @@ class NetworkAnalysisTool:
         # Create main content area for packet display
         self.create_main_content()
         
+        # Create the network dashboard tab
+        self.create_network_dashboard()
+        
         # Set initial status
         self.update_stats()
         
@@ -130,9 +136,7 @@ class NetworkAnalysisTool:
         # Analysis
         ttk.Separator(self.toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
         
-        self.stats_button = ttk.Button(self.toolbar, text="📊 Statistics", command=self.show_statistics)
-        self.stats_button.pack(side=tk.LEFT, padx=5)
-        create_tooltip(self.stats_button, "Show packet statistics and visualizations")
+        # Statistics button removed in favor of the permanent Statistics tab in the dashboard
         
         self.export_button = ttk.Button(self.toolbar, text="📑 Export PDF", command=self.export_to_pdf)
         self.export_button.pack(side=tk.LEFT, padx=5)
@@ -646,8 +650,30 @@ class NetworkAnalysisTool:
         if self.is_capturing:
             # Update stats
             self.update_stats()
+            
+            # Update all dashboards
+            self.update_dashboards()
+            
             # Schedule the next update
             self.root.after(500, self.update_gui)
+            
+    def update_dashboards(self):
+        """Update all dashboard tabs with current data."""
+        # Update network health dashboard if it exists
+        if hasattr(self, 'network_dashboard') and hasattr(self.network_dashboard, 'update_dashboard'):
+            try:
+                self.network_dashboard.update_dashboard()
+            except Exception as e:
+                print(f"Error updating network dashboard: {e}")
+                
+        # Update statistics dashboard if it exists
+        if hasattr(self, 'stats_dashboard') and hasattr(self.stats_dashboard, 'update_dashboard'):
+            try:
+                self.stats_dashboard.update_dashboard()
+            except Exception as e:
+                print(f"Error updating statistics dashboard: {e}")
+                
+        # Note: Device dashboard has its own update thread
             
     def update_status_periodically(self):
         """Update status bar periodically to show time elapsed."""
@@ -1054,124 +1080,40 @@ Payload Size: {payload} bytes
             else:
                 messagebox.showerror("Error", f"Failed to load packets: {result}")
                 
+    def show_statistics_tab(self):
+        """Show the statistics dashboard tab."""
+        # Find the statistics tab index
+        for i in range(self.table_frame.index("end")):
+            if self.table_frame.tab(i, "text") == "Statistics":
+                self.table_frame.select(i)
+                if hasattr(self, "stats_dashboard") and hasattr(self.stats_dashboard, "update_dashboard"):
+                    self.stats_dashboard.update_dashboard()
+                return
+        
+        # If we're here, the tab wasn't found - let's create it if needed
+        if not hasattr(self, "stats_dashboard"):
+            self.stats_dashboard_frame = ttk.Frame(self.table_frame)
+            self.table_frame.add(self.stats_dashboard_frame, text="Statistics")
+            
+            # Import and initialize the statistics dashboard
+            self.stats_dashboard = StatisticsDashboard(self.stats_dashboard_frame, self.packet_capture)
+            
+            # Select the newly created tab
+            tab_count = self.table_frame.index("end")
+            self.table_frame.select(tab_count - 1)
+        else:
+            # Tab should have been created in create_network_dashboard but wasn't found
+            print("Statistics dashboard tab not found despite being created")
+        
     def show_statistics(self):
         """Show packet statistics and visualizations."""
+        # For backwards compatibility, now just shows the Statistics tab
         if not self.packet_capture.packets:
             messagebox.showwarning("No Data", "No packets to analyze. Capture some traffic first.")
             return
             
-        # Create a new window for statistics
-        stats_window = Toplevel(self.root)
-        stats_window.title("Packet Statistics")
-        stats_window.geometry("800x600")
-        stats_window.minsize(800, 600)
-        stats_window.grab_set()  # Make modal
-        
-        # Create a notebook for different charts
-        notebook = ttk.Notebook(stats_window)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Protocol distribution frame
-        protocol_frame = ttk.Frame(notebook)
-        notebook.add(protocol_frame, text="Protocol Distribution")
-        
-        # Add a label explaining statistics are being generated
-        ttk.Label(protocol_frame, text="Generating statistics visualization...", font=("Segoe UI", 12)).pack(pady=20)
-        
-        # Make sure protocol_frame is visible
-        protocol_frame.update()
-        
-        # Get protocol statistics
-        protocol_stats = self.packet_capture.get_statistics()
-        protocols = list(protocol_stats.keys())
-        counts = list(protocol_stats.values())
-        
-        # Create a pie chart
-        fig = go.Figure(data=[go.Pie(
-            labels=protocols,
-            values=counts,
-            hole=.3,
-            marker_colors=['#3366CC', '#DC3912', '#FF9900', '#109618', '#990099']
-        )])
-        
-        fig.update_layout(
-            title_text="Protocol Distribution",
-            height=500,
-        )
-        
-        # Convert to PNG image data
-        import io
-        from PIL import Image, ImageTk
-        
-        # Save the figure as a PNG image in memory
-        img_bytes = io.BytesIO()
-        fig.write_image(img_bytes, format="png", width=700, height=500)
-        img_bytes.seek(0)
-        
-        # Convert to PhotoImage for display in Tkinter
-        img = Image.open(img_bytes)
-        photo_img = ImageTk.PhotoImage(img)
-        
-        # Display the image in the protocol frame
-        # First clear any existing widgets
-        for widget in protocol_frame.winfo_children():
-            widget.destroy()
-        
-        # Create a label to display the image
-        img_label = ttk.Label(protocol_frame, image=photo_img)
-        img_label.image = photo_img  # Keep a reference to prevent garbage collection
-        img_label.pack(padx=10, pady=10, expand=True)
-            
-        # Traffic timeline frame (if we have enough data)
-        if len(self.packet_capture.packets) > 10:
-            time_frame = ttk.Frame(notebook)
-            notebook.add(time_frame, text="Traffic Timeline")
-            
-            # Create time series data
-            packet_times = [p.time for p in self.packet_capture.packets]
-            min_time = min(packet_times)
-            
-            # Group by second
-            from collections import defaultdict
-            packets_by_time = defaultdict(int)
-            for p_time in packet_times:
-                # Round to nearest second
-                second = int(p_time - min_time)
-                packets_by_time[second] += 1
-                
-            # Sort by time
-            sorted_times = sorted(packets_by_time.items())
-            x_values = [t[0] for t in sorted_times]
-            y_values = [t[1] for t in sorted_times]
-            
-            # Create a time series chart
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=x_values, y=y_values, mode='lines+markers'))
-            
-            fig2.update_layout(
-                title="Packets per Second",
-                xaxis_title="Seconds elapsed",
-                yaxis_title="Packet count",
-                height=500
-            )
-            
-            # Save the figure as a PNG image in memory
-            time_img_bytes = io.BytesIO()
-            fig2.write_image(time_img_bytes, format="png", width=700, height=500)
-            time_img_bytes.seek(0)
-            
-            # Convert to PhotoImage for display in Tkinter
-            time_img = Image.open(time_img_bytes)
-            time_photo_img = ImageTk.PhotoImage(time_img)
-            
-            # Clear any existing widgets in the time frame
-            for widget in time_frame.winfo_children():
-                widget.destroy()
-            
-            # Create a label to display the image
-            time_img_label = ttk.Label(time_frame, image=time_photo_img)
-            time_img_label.image = time_photo_img  # Keep a reference to prevent garbage collection
-            time_img_label.pack(padx=10, pady=10, expand=True)
+        # Switch to the Statistics tab
+        self.show_statistics_tab()
                 
     def export_to_pdf(self):
         """Export statistics to a PDF report."""
@@ -1334,8 +1276,50 @@ Payload Size: {payload} bytes
         about_dialog = AboutDialog(self.root)
         about_dialog.show()
         
+    def create_network_dashboard(self):
+        """Create all dashboard tabs."""
+        # Create network health dashboard tab
+        self.health_frame = ttk.Frame(self.table_frame)
+        health_tab_index = self.table_frame.index("end")
+        self.table_frame.add(self.health_frame, text="Network Health")
+        
+        # Initialize the network health dashboard
+        self.network_dashboard = NetworkDashboard(self.health_frame, self.packet_capture)
+        
+        # Create statistics dashboard tab
+        self.stats_dashboard_frame = ttk.Frame(self.table_frame)
+        stats_tab_index = self.table_frame.index("end")
+        self.table_frame.add(self.stats_dashboard_frame, text="Statistics")
+        
+        # Initialize the statistics dashboard
+        self.stats_dashboard = StatisticsDashboard(self.stats_dashboard_frame, self.packet_capture)
+        
+        # Create device profiling dashboard tab
+        self.device_frame = ttk.Frame(self.table_frame)
+        device_tab_index = self.table_frame.index("end")
+        self.table_frame.add(self.device_frame, text="Device Profiling")
+        
+        # Initialize the device dashboard
+        self.device_dashboard = DeviceDashboard(self.device_frame, self.packet_capture)
+        
+        # Show the Network Health tab by default to highlight the new features
+        self.root.update()
+        self.table_frame.select(health_tab_index)
+    
     def on_closing(self):
         """Handle window closing."""
+        # Clean up dashboards if they exist
+        if hasattr(self, 'network_dashboard'):
+            self.network_dashboard.stop()
+            
+        if hasattr(self, 'stats_dashboard'):
+            if hasattr(self.stats_dashboard, 'stop'):
+                self.stats_dashboard.stop()
+            
+        if hasattr(self, 'device_dashboard'):
+            if hasattr(self.device_dashboard, 'stop'):
+                self.device_dashboard.stop()
+            
         if hasattr(self, 'is_capturing') and self.is_capturing:
             if messagebox.askyesno("Quit", "A capture is in progress. Are you sure you want to quit?"):
                 self.stop_capture()

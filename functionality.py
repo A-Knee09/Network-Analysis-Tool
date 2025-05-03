@@ -73,7 +73,10 @@ class PacketCapture:
         self.max_packets = 10000  # Maximum packets to keep in memory
 
     def start_capture(self, packet_handler, interface=None):
-        """Start capturing packets in real-time."""
+        """Start capturing packets in real-time with improved error handling and multiple capture methods."""
+        # Reset capture state
+        self.packets = []
+        self.packet_count = 0
         self.capturing = True
         self.start_time = time.time()
         self.selected_interface = interface
@@ -81,30 +84,92 @@ class PacketCapture:
         # Reset stats
         self.stats = {"tcp": 0, "udp": 0, "icmp": 0, "other": 0}
         
-        try:
-            print(f"Starting capture on interface {interface}")
-            if interface:
-                # Check for restricted permissions
-                if not self.test_capture(interface):
-                    return "Permission denied: Network capture requires administrative privileges."
-                
-                # Start the actual capture    
-                sniff(prn=packet_handler, 
-                     stop_filter=lambda _: not self.capturing, 
-                     iface=interface,
-                     store=False)
+        # If no interface is specified, try to find one
+        if not interface:
+            interfaces = get_available_interfaces()
+            if interfaces:
+                interface = interfaces[0][0]  # Use first interface
+                print(f"No interface specified, using: {interface}")
+                self.selected_interface = interface
             else:
-                # Check for restricted permissions on default interface
-                if not self.test_capture():
-                    return "Permission denied: Network capture requires administrative privileges."
-                    
-                sniff(prn=packet_handler, 
-                     stop_filter=lambda _: not self.capturing,
-                     store=False)
-        except Exception as e:
-            # Return the error to be handled by the GUI
-            print(f"Error in start_capture: {e}")
-            return str(e)
+                error_msg = "No network interfaces available"
+                print(error_msg)
+                return error_msg
+        
+        print(f"Starting capture on interface: {interface}")
+        
+        # Create capture thread to prevent blocking the UI
+        def capture_thread_func():
+            try:
+                # Try multiple capture methods for better compatibility
+                methods_to_try = ["permissions", "standard", "socket", "async"]
+                
+                for method in methods_to_try:
+                    try:
+                        if method == "permissions":
+                            # First, check permissions
+                            if not self.test_capture(interface):
+                                print("Permission check failed, will try alternative methods")
+                                continue
+                                
+                        elif method == "standard":
+                            print("Trying standard capture method...")
+                            # Standard sniff method
+                            sniff(prn=packet_handler, 
+                                 stop_filter=lambda _: not self.capturing, 
+                                 iface=interface,
+                                 store=False)
+                            return None  # Success
+                            
+                        elif method == "socket":
+                            print("Trying socket-based capture method...")
+                            # Skip permission check for socket method
+                            from kamene.all import AsyncSniffer
+                            sniffer = AsyncSniffer(
+                                prn=packet_handler,
+                                iface=interface,
+                                store=False
+                            )
+                            sniffer.start()
+                            # Keep checking if we should stop
+                            while self.capturing:
+                                time.sleep(0.5)
+                            sniffer.stop()
+                            return None  # Success
+                            
+                        elif method == "async":
+                            print("Trying async capture method with timeout...")
+                            # Use a timed sniffing approach
+                            while self.capturing:
+                                # Capture in short bursts to allow stopping
+                                sniff(prn=packet_handler, 
+                                    timeout=1,  # Short timeout to check capturing flag
+                                    iface=interface,
+                                    store=False)
+                            return None  # Success
+                            
+                    except Exception as method_error:
+                        print(f"Method {method} failed: {method_error}")
+                        if method == methods_to_try[-1]:
+                            # If this was the last method, report failure
+                            error_msg = f"All capture methods failed, last error: {method_error}"
+                            print(error_msg)
+                            return error_msg
+                
+                return "Failed to capture packets with any method"
+                
+            except Exception as e:
+                # Return the error to be handled by the GUI
+                error_msg = f"Error in capture thread: {e}"
+                print(error_msg)
+                return error_msg
+        
+        # Start capture in a separate thread to not block the UI
+        self.capture_thread = threading.Thread(target=capture_thread_func)
+        self.capture_thread.daemon = True
+        self.capture_thread.start()
+        
+        # No immediate errors
         return None
         
     def test_capture(self, interface=None):
@@ -145,12 +210,50 @@ class PacketCapture:
         length = len(packet)
         protocol_type = "other"  # Default protocol type for stats
         
-        # Early return for non-IP/ARP packets to avoid unnecessary processing
+        # Enhanced packet identification for non-IP/ARP packets
         if not (IP in packet or ARP in packet):
+            # Try to extract more information from ethernet frames
+            src = getattr(packet, 'src', "Unknown")
+            dst = getattr(packet, 'dst', "Unknown")
+            
+            # Try to identify protocol based on common patterns
+            protocol = "Local Network"  # Better default than "Unknown"
+            
+            # Extract Ethernet type if available
+            if hasattr(packet, 'type'):
+                if packet.type == 0x0800:
+                    protocol = "IPv4"
+                elif packet.type == 0x0806:
+                    protocol = "ARP"
+                elif packet.type == 0x86dd:
+                    protocol = "IPv6"
+                elif packet.type == 0x8100:
+                    protocol = "VLAN"
+                
+            # Try to extract more protocol info from packet layers
+            try:
+                # Check if it's a common protocol
+                packet_layers = packet.layers()
+                layer_names = [layer.__name__ for layer in packet_layers]
+                
+                if any("DNS" in str(layer) for layer in layer_names):
+                    protocol = "DNS"
+                elif any("DHCP" in str(layer) for layer in layer_names):
+                    protocol = "DHCP"
+                elif any("ICMP" in str(layer) for layer in layer_names):
+                    protocol = "ICMP"
+                elif any("NBNS" in str(layer) or "NetBIOS" in str(layer) for layer in layer_names):
+                    protocol = "NetBIOS"
+                elif any("LLMNR" in str(layer) for layer in layer_names):
+                    protocol = "LLMNR"
+            except:
+                # If we can't extract layers, still better than showing "Unknown"
+                pass
+            
             packet_info = {
-                "src": "Unknown",
-                "dst": "Unknown",
-                "protocol": "Unknown",
+                "src": src,
+                "dst": dst,
+                "protocol": protocol,
                 "length": length,
                 "time": time_stamp,
                 "port_info": "",
@@ -200,6 +303,24 @@ class PacketCapture:
                     service = "SMTP"
                 elif dst_port == 53 or src_port == 53:
                     service = "DNS"
+                elif dst_port == 3389 or src_port == 3389:
+                    service = "RDP"
+                elif dst_port == 5900 or src_port == 5900:
+                    service = "VNC"
+                elif dst_port == 1194 or src_port == 1194:
+                    service = "OpenVPN" 
+                elif dst_port == 8080 or src_port == 8080:
+                    service = "HTTP-Alt"
+                elif dst_port == 8443 or src_port == 8443:
+                    service = "HTTPS-Alt"
+                elif dst_port == 27017 or src_port == 27017:
+                    service = "MongoDB"
+                elif dst_port == 3306 or src_port == 3306:
+                    service = "MySQL"
+                elif dst_port == 5432 or src_port == 5432:
+                    service = "PostgreSQL"
+                elif dst_port == 6379 or src_port == 6379:
+                    service = "Redis"
                 else:
                     service = "Unknown"
                     
@@ -224,6 +345,14 @@ class PacketCapture:
                     service = "DHCP"
                 elif dst_port == 161 or src_port == 161:
                     service = "SNMP"
+                elif dst_port == 123 or src_port == 123:
+                    service = "NTP"
+                elif dst_port == 5353 or src_port == 5353:
+                    service = "mDNS"
+                elif dst_port == 1900 or src_port == 1900:
+                    service = "SSDP"
+                elif dst_port in range(33434, 33600):
+                    service = "Traceroute"
                 else:
                     service = "Unknown"
                     
@@ -243,6 +372,10 @@ class PacketCapture:
                         protocol = "ICMP (Echo Reply)"
                     elif icmp_type == 8:
                         protocol = "ICMP (Echo Request)"
+                    elif icmp_type == 3:
+                        protocol = "ICMP (Destination Unreachable)"
+                    elif icmp_type == 11:
+                        protocol = "ICMP (Time Exceeded)"
 
             # Prepare packet info
             packet_info = {
