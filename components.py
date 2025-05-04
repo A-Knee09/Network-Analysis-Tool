@@ -9,6 +9,13 @@ from ttkbootstrap import Style
 import time
 import random
 import math
+import logging
+import platform
+import os
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 def create_tooltip(widget, text):
     """Create a tooltip for a given widget with improved behavior."""
@@ -329,8 +336,15 @@ class InterfaceSelector:
             "Other": []
         }
         
-        for iface, ip in interfaces:
-            name = iface.lower()
+        for iface_info in interfaces:
+            # Handle both string and tuple formats
+            if isinstance(iface_info, tuple) and len(iface_info) >= 2:
+                iface, ip = iface_info
+            else:
+                iface = iface_info
+                ip = "Unknown IP"
+                
+            name = str(iface).lower()
             
             if name == "lo" or "loop" in name:
                 types["Loopback"].append((iface, ip))
@@ -352,8 +366,16 @@ class InterfaceSelector:
             self.interface_tree.delete(item)
             
         # Add interfaces
-        for i, (iface, ip) in enumerate(self.interfaces):
+        for i, iface_info in enumerate(self.interfaces):
             tag = 'odd' if i % 2 else 'even'
+            
+            # Handle both string and tuple formats
+            if isinstance(iface_info, tuple) and len(iface_info) >= 2:
+                iface, ip = iface_info
+            else:
+                iface = iface_info
+                ip = "Unknown IP"
+                
             self.interface_tree.insert("", "end", values=(iface, ip), tags=(tag,))
             
     def _filter_interfaces(self, *args):
@@ -365,123 +387,162 @@ class InterfaceSelector:
         for item in self.interface_tree.get_children():
             self.interface_tree.delete(item)
             
-        # Determine which interfaces to show
+        # Get filtered interfaces
+        filtered_interfaces = []
+        
         if iface_type == "All":
-            interfaces_to_show = self.interfaces
+            # Use all interfaces
+            for type_interfaces in self.interface_types.values():
+                filtered_interfaces.extend(type_interfaces)
         else:
-            interfaces_to_show = self.interface_types.get(iface_type, [])
+            # Use only interfaces of the selected type
+            filtered_interfaces = self.interface_types.get(iface_type, [])
             
-        # Filter by search text and add matching interfaces
-        for i, (iface, ip) in enumerate(interfaces_to_show):
-            if (search_text in iface.lower() or search_text in ip.lower() or not search_text):
-                tag = 'odd' if i % 2 else 'even'
-                self.interface_tree.insert("", "end", values=(iface, ip), tags=(tag,))
-                
+        # Apply search filter
+        if search_text:
+            filtered_interfaces = [
+                (iface, ip) for iface, ip in filtered_interfaces
+                if search_text in str(iface).lower() or search_text in str(ip).lower()
+            ]
+            
+        # Add filtered interfaces to tree
+        for i, (iface, ip) in enumerate(filtered_interfaces):
+            tag = 'odd' if i % 2 else 'even'
+            self.interface_tree.insert("", "end", values=(iface, ip), tags=(tag,))
+            
     def _on_selection_changed(self, event):
-        """Handle selection change in the interface tree."""
+        """Handle interface selection change."""
         selection = self.interface_tree.selection()
         if not selection:
             return
             
-        # Get the selected interface
-        item = self.interface_tree.item(selection[0])
-        interface_name = item["values"][0]
-        
-        # Update the details panel
-        self._update_details(interface_name)
-        
-    def _update_details(self, interface_name):
-        """Update interface details panel with information about the selected interface."""
-        # Find the interface in our list
-        selected_interface = None
-        for iface, ip in self.interfaces:
-            if iface == interface_name:
-                selected_interface = (iface, ip)
-                break
-                
-        if not selected_interface:
+        item = selection[0]
+        values = self.interface_tree.item(item, "values")
+        if not values:
             return
             
-        iface, ip = selected_interface
+        # Get interface name and IP
+        iface = values[0]
+        ip = values[1]
         
-        # Determine the interface type
-        iface_type = "Unknown"
-        for type_name, interfaces in self.interface_types.items():
-            if selected_interface in interfaces:
-                iface_type = type_name
-                break
-                
-        # Update fields
+        # Update detail fields
         self.detail_fields["Name"].set(iface)
         self.detail_fields["IP Address"].set(ip)
         
-        # Try to get MAC address, otherwise show "Unknown"
-        mac = "Unknown"
-        self.detail_fields["MAC Address"].set(mac)
-        
+        # Determine interface type
+        if str(iface).lower() == "lo" or "loop" in str(iface).lower():
+            iface_type = "Loopback"
+        elif str(iface).lower().startswith(("eth", "en")) or "ethernet" in str(iface).lower():
+            iface_type = "Ethernet"
+        elif str(iface).lower().startswith(("wlan", "wi", "wlp")) or "wireless" in str(iface).lower():
+            iface_type = "WiFi"
+        elif any(x in str(iface).lower() for x in ["vir", "vbox", "vmnet", "docker", "br-", "veth"]):
+            iface_type = "Virtual"
+        else:
+            iface_type = "Other"
+            
         self.detail_fields["Type"].set(iface_type)
         
+        # Set MAC address (simulated for now)
+        mac_address = self._get_mac_address(iface)
+        self.detail_fields["MAC Address"].set(mac_address)
+        
         # Set status based on IP
-        if ip and ip not in ["Unknown IP", "Active Interface"]:
+        if ip and ip != "Unknown IP":
             self.detail_fields["Status"].set("Active")
-            # Update network status indicator
             self.status_indicator.config(text="●", foreground="green")
-            self.status_text.config(text="Interface appears to be active")
+            self.status_text.config(text="Interface is active and has an IP address")
         else:
             self.detail_fields["Status"].set("Unknown")
-            # Update network status indicator
-            self.status_indicator.config(text="●", foreground="gray")
-            self.status_text.config(text="Interface status unknown")
+            self.status_indicator.config(text="●", foreground="orange")
+            self.status_text.config(text="Interface status is unknown")
             
-        # Set description
-        if "loop" in iface.lower() or iface.lower() == "lo":
-            desc = "Loopback interface for local communication"
-        elif "eth" in iface.lower() or "en" in iface.lower():
-            desc = "Ethernet network interface for wired connections"
-        elif "wlan" in iface.lower() or "wi" in iface.lower():
-            desc = "Wireless network interface for WiFi connections"
-        elif "docker" in iface.lower() or "br-" in iface.lower():
-            desc = "Virtual bridge interface for container networking"
-        else:
-            desc = "Network interface"
+        # Set description based on type
+        descriptions = {
+            "Ethernet": "Wired network interface for connecting to networks via Ethernet cable",
+            "WiFi": "Wireless network interface for connecting to WiFi networks",
+            "Loopback": "Loopback interface for local communications within the device",
+            "Virtual": "Virtual network interface for containerization or virtualization",
+            "Other": "Network interface of unspecified type"
+        }
+        
+        self.detail_fields["Description"].set(descriptions.get(iface_type, "Network interface"))
+        
+    def _get_mac_address(self, iface):
+        """Get MAC address for an interface (simulated)."""
+        # In a real implementation, this would use platform-specific commands to get the actual MAC
+        # For now, generate a consistent pseudo-MAC based on the interface name
+        try:
+            # Use a hash of the interface name to generate a consistent pseudo-MAC
+            import hashlib
+            hash_obj = hashlib.md5(str(iface).encode())
+            hash_digest = hash_obj.hexdigest()
             
-        self.detail_fields["Description"].set(desc)
+            # Format as a MAC address (first 12 characters of the hash)
+            mac = ':'.join([hash_digest[i:i+2] for i in range(0, 12, 2)])
+            return mac
+        except Exception as e:
+            logger.error(f"Error generating MAC address: {e}")
+            return "Unknown MAC"
         
     def _test_connection(self):
-        """Test connection on selected interface."""
+        """Test the selected interface."""
         selection = self.interface_tree.selection()
         if not selection:
             return
             
-        # Get the selected interface
-        item = self.interface_tree.item(selection[0])
-        interface_name = item["values"][0]
+        item = selection[0]
+        values = self.interface_tree.item(item, "values")
+        if not values:
+            return
+            
+        # Get interface name
+        iface = values[0]
         
-        # Update status to indicate testing
-        self.status_indicator.config(text="○", foreground="orange")
+        # Update status
+        self.status_indicator.config(text="◉", foreground="orange")
         self.status_text.config(text="Testing connection...")
-        self.window.update_idletasks()
+        self.status_frame.update()
         
-        # Simulate connection test with a delay
+        # Simulate connection test (brief delay)
         def test_thread():
-            # Simulate testing...
-            time.sleep(1.5)
+            time.sleep(1)  # Simulate network test
             
-            # Update status
-            self.window.after(0, lambda: self.status_indicator.config(text="●", foreground="green"))
-            self.window.after(0, lambda: self.status_text.config(text="Connection test successful"))
+            # Update UI in main thread
+            self.window.after(0, self._update_test_result, iface)
             
-        # Start test in background
         threading.Thread(target=test_thread, daemon=True).start()
+        
+    def _update_test_result(self, iface):
+        """Update test result in UI thread."""
+        # In a real implementation, this would check if the interface can be used for packet capture
+        # For now, assume success except for virtual interfaces
+        is_virtual = any(x in str(iface).lower() for x in ["vir", "vbox", "vmnet", "docker", "br-", "veth"])
+        
+        if is_virtual:
+            self.status_indicator.config(text="●", foreground="orange")
+            self.status_text.config(text="This is a virtual interface and may have limited functionality")
+        else:
+            self.status_indicator.config(text="●", foreground="green")
+            self.status_text.config(text="Interface is ready for packet capture")
         
     def center_window(self):
         """Center the window on the screen."""
         self.window.update_idletasks()
+        
         width = self.window.winfo_width()
         height = self.window.winfo_height()
-        x = (self.window.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.window.winfo_screenheight() // 2) - (height // 2)
-        self.window.geometry('{}x{}+{}+{}'.format(width, height, x, y))
+        
+        # Get screen dimensions
+        screen_width = self.window.winfo_screenwidth()
+        screen_height = self.window.winfo_screenheight()
+        
+        # Calculate position
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+        
+        # Set position
+        self.window.geometry(f"{width}x{height}+{x}+{y}")
         
     def on_select(self):
         """Handle interface selection."""
@@ -489,73 +550,267 @@ class InterfaceSelector:
         if not selection:
             return
             
-        # Get the selected interface
-        item = self.interface_tree.item(selection[0])
-        interface_name = item["values"][0]
+        item = selection[0]
+        values = self.interface_tree.item(item, "values")
+        if not values:
+            return
+            
+        # Get selected interface
+        interface = values[0]
         
-        # Call the callback with the selected interface
+        # Store preference if requested
+        if self.remember_var.get():
+            try:
+                # Save to preferences file
+                with open("interface_preference.txt", "w") as f:
+                    f.write(interface)
+            except Exception as e:
+                logger.error(f"Error saving interface preference: {e}")
+        
+        # Call callback with selected interface
         self.window.destroy()
-        self.callback(interface_name)
+        self.callback(interface)
         
     def on_cancel(self):
-        """Handle cancel button."""
+        """Handle cancel."""
         self.window.destroy()
         
+        # If no interface will be selected, use a default
+        if self.callback:
+            # Try to find a non-loopback interface
+            default_interface = None
+            for interfaces in self.interface_types.values():
+                if interfaces and "loopback" not in str(interfaces[0][0]).lower():
+                    default_interface = interfaces[0][0]
+                    break
+                    
+            # If no non-loopback found, use the first one
+            if not default_interface and self.interfaces:
+                if isinstance(self.interfaces[0], tuple):
+                    default_interface = self.interfaces[0][0]
+                else:
+                    default_interface = self.interfaces[0]
+                    
+            if default_interface:
+                self.callback(default_interface)
+
+
 class AboutDialog:
-    """Simple dialog showing information about the application."""
-    def __init__(self, parent):
-        self.parent = parent
-        self.dialog = None
+    """About dialog with application information and animated GIF."""
+    def __init__(self, parent, app_name, version, description):
+        # Create the about dialog window
+        self.window = tk.Toplevel(parent)
+        self.window.title("About")
+        self.window.geometry("700x550")
+        self.window.minsize(700, 550)
+        self.window.resizable(True, True)
+        self.window.transient(parent)
+        self.window.grab_set()
         
-    def show(self):
-        """Show the about dialog with simple design."""
-        if self.dialog:
-            self.dialog.destroy()
+        # Make it modal
+        self.window.protocol("WM_DELETE_WINDOW", self.close)
+        
+        # Main frame with padding
+        self.frame = ttk.Frame(self.window, padding=20)
+        self.frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Create a horizontal layout frame
+        content_frame = ttk.Frame(self.frame)
+        content_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        # Left side - Network animation with frame border (sized to match animation)
+        # We'll adjust the frame size after we know the animation dimensions
+        icon_frame = ttk.Frame(content_frame, borderwidth=2, relief="groove", padding=10)
+        icon_frame.pack(side=tk.LEFT, padx=(0, 20))
+        
+        # Create a label for the GIF animation
+        self.animation_label = ttk.Label(icon_frame)
+        self.animation_label.pack(padx=5, pady=5)
+        
+        # Load and display the GIF animation
+        try:
+            # Load the GIF file
+            self.gif_path = "assets/about_animation4.gif"
+            self.gif_frames = []
+            self.current_frame = 0
             
-        # Create dialog window
-        self.dialog = Toplevel(self.parent)
-        self.dialog.title("About Network Analysis Tool")
-        self.dialog.geometry("400x300")
-        self.dialog.resizable(False, False)
-        self.dialog.transient(self.parent)
-        self.dialog.grab_set()
+            # Open the GIF
+            try:
+                from PIL import Image, ImageTk
+                
+                # Check if file exists
+                if os.path.exists(self.gif_path):
+                    gif = Image.open(self.gif_path)
+                    
+                    # Define desired size (smaller than original)
+                    max_width = 300  # Set maximum width
+                    max_height = 300  # Set maximum height
+                    
+                    # Get original size
+                    original_width, original_height = gif.size
+                    
+                    # Calculate scaling factor to maintain aspect ratio
+                    width_ratio = max_width / original_width
+                    height_ratio = max_height / original_height
+                    scaling_factor = min(width_ratio, height_ratio)
+                    
+                    # Calculate new dimensions
+                    new_width = int(original_width * scaling_factor)
+                    new_height = int(original_height * scaling_factor)
+                    
+                    # Get all frames and resize them
+                    for i in range(0, gif.n_frames):
+                        gif.seek(i)
+                        # Resize the frame while maintaining aspect ratio
+                        resized_frame = gif.copy().resize((new_width, new_height), Image.LANCZOS)
+                        frame = ImageTk.PhotoImage(resized_frame)
+                        self.gif_frames.append(frame)
+                    
+                    # Start animation
+                    self.animate_gif()
+                else:
+                    # If the file doesn't exist, show a placeholder message
+                    self.animation_label.configure(text=f"Animation file not found:\n{self.gif_path}")
+                    
+            except ImportError:
+                # Fallback if PIL is not available
+                self.animation_label.configure(text="GIF Animation\n(requires PIL)")
+                
+        except Exception as e:
+            # Fallback to a static label if the GIF can't be loaded
+            self.animation_label.configure(text=f"Network Analyzer\n(Animation error: {str(e)})")
+            
+        # Right side - Text content
+        self.text_frame = ttk.Frame(content_frame)
+        self.text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Create main content frame
-        main_frame = ttk.Frame(self.dialog, padding=20)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # Store parameters
+        self.app_name = app_name
+        self.version = version
+        self.description = description
         
-        # Create a search icon using unicode
-        icon_label = ttk.Label(main_frame, text="🔍", font=("Arial", 36))
-        icon_label.pack(pady=(10, 20))
+        # Application name
+        ttk.Label(
+            self.text_frame,
+            text=self.app_name,
+            font=("Segoe UI", 16, "bold"),
+            justify=tk.CENTER
+        ).pack(pady=(0, 5), fill=tk.X)
         
-        # Add application name
-        app_name = ttk.Label(main_frame, text="Network Analysis Tool", font=("Arial", 16, "bold"), foreground="#1E88E5")
-        app_name.pack(pady=5)
+        # Version
+        ttk.Label(
+            self.text_frame,
+            text=f"Version {self.version}",
+            font=("Segoe UI", 10),
+            justify=tk.CENTER
+        ).pack(pady=(0, 10), fill=tk.X)
         
-        # Add version
-        version = ttk.Label(main_frame, text="Version 1.0.0")
-        version.pack(pady=5)
+        # Description - either use provided description or default
+        description_text = "Network Analysis Tool developed for final year project. Originally created in December 2024 as a tkinter and networking learning project and later enhanced for academic submission.\n\nThis tool analyzes network traffic, captures packets, and provides visualizations for network monitoring and security analysis.\n\n Made with pain tears and frustration by A-knee09 (Anirudh Saksena) :D"
         
-        # Add separator
-        separator = ttk.Separator(main_frame, orient="horizontal")
-        separator.pack(fill="x", pady=15)
+        description_label = ttk.Label(
+            self.text_frame,
+            text=description_text,
+            wraplength=320,
+            justify=tk.LEFT
+        )
+        description_label.pack(pady=(0, 20), anchor=tk.W, fill=tk.X)
         
-        # Add close button at the bottom
-        close_button = ttk.Button(self.dialog, text="Close", command=self.dialog.destroy)
-        close_button.pack(side=tk.BOTTOM, pady=20)
+        # Tech stack section
+        ttk.Label(
+            self.text_frame,
+            text="Tech Stack:",
+            font=("Segoe UI", 10, "bold")
+        ).pack(pady=(5, 5), anchor=tk.W)
         
-    def center_dialog(self):
-        """Center the dialog on the parent window."""
-        self.dialog.update_idletasks()
-        width = self.dialog.winfo_width()
-        height = self.dialog.winfo_height()
+        tech_stack = ttk.Frame(self.text_frame, relief=tk.GROOVE, borderwidth=2, padding=10)
+        tech_stack.pack(fill=tk.X, pady=(0, 10), anchor=tk.W, padx=5)
         
-        parent_x = self.parent.winfo_rootx()
-        parent_y = self.parent.winfo_rooty()
-        parent_width = self.parent.winfo_width()
-        parent_height = self.parent.winfo_height()
+        ttk.Label(tech_stack, text="• Python").pack(anchor=tk.W)
+        ttk.Label(tech_stack, text="• Tkinter/ttk").pack(anchor=tk.W)
+        ttk.Label(tech_stack, text="• Matplotlib").pack(anchor=tk.W)
+        ttk.Label(tech_stack, text="• Kamene (Scapy fork)").pack(anchor=tk.W)
+        ttk.Label(tech_stack, text="• FPDF").pack(anchor=tk.W)
         
+        # System info
+        ttk.Label(
+            self.text_frame,
+            text="System Information:",
+            font=("Segoe UI", 10, "bold")
+        ).pack(pady=(5, 5), anchor=tk.W)
+        
+        ttk.Label(
+            self.text_frame,
+            text=f"OS: {platform.system()} {platform.release()}",
+        ).pack(anchor=tk.W)
+        
+        ttk.Label(
+            self.text_frame,
+            text=f"Python: {platform.python_version()}",
+        ).pack(anchor=tk.W)
+        
+        # Close button
+        ttk.Button(
+            self.frame,
+            text="Close",
+            command=self.close,
+            width=15
+        ).pack(side=tk.BOTTOM, pady=(20, 0))
+        
+        # Center the window
+        self.center_window()
+    
+    def animate_gif(self):
+        """Animate the GIF by cycling through frames."""
+        if self.gif_frames:
+            # Update the label with the next frame
+            self.animation_label.configure(image=self.gif_frames[self.current_frame])
+            
+            # On first frame, adjust the frame size to match the animation size with padding
+            if self.current_frame == 0 and hasattr(self, 'animation_adjusted') == False:
+                # Get the size of the first frame (all frames have the same size)
+                img_width = self.gif_frames[0].width()
+                img_height = self.gif_frames[0].height()
+                
+                # Set a fixed width and height for the frame with some padding
+                padding = 20  # Padding around the animation (10px on each side)
+                frame_width = img_width + padding
+                frame_height = img_height + padding
+                
+                # Force the animation label and its parent frame to a fixed size
+                # For ttk frames, we need to use width and height options directly
+                self.animation_label.master['width'] = frame_width
+                self.animation_label.master['height'] = frame_height
+                self.animation_label.master.pack_propagate(False)  # Prevent parent from shrinking
+                
+                # Mark as adjusted so we don't do this again
+                self.animation_adjusted = True
+            
+            # Move to the next frame (loop if at the end)
+            self.current_frame = (self.current_frame + 1) % len(self.gif_frames)
+            
+            # Schedule the next frame update
+            self.window.after(100, self.animate_gif)  # Update every 100ms
+    
+    def center_window(self):
+        """Center the window on the parent."""
+        self.window.update_idletasks()
+        
+        width = self.window.winfo_width()
+        height = self.window.winfo_height()
+        
+        parent_x = self.window.master.winfo_rootx()
+        parent_y = self.window.master.winfo_rooty()
+        parent_width = self.window.master.winfo_width()
+        parent_height = self.window.master.winfo_height()
+        
+        # Calculate position
         x = parent_x + (parent_width - width) // 2
         y = parent_y + (parent_height - height) // 2
         
-        self.dialog.geometry(f"{width}x{height}+{x}+{y}")
+        # Set position
+        self.window.geometry(f"{width}x{height}+{x}+{y}")
+        
+    def close(self):
+        """Close the dialog."""
+        self.window.destroy()

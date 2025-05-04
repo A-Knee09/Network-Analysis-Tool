@@ -1,332 +1,439 @@
 """
-Statistics Dashboard - Real-time visualization of protocol statistics
+Statistics Dashboard Module
+This module provides a dashboard for displaying network statistics.
 """
 
 import tkinter as tk
 from tkinter import ttk
+import matplotlib
+matplotlib.use('Agg')  # Use Agg backend to avoid GUI issues
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
-import numpy as np
-from PIL import Image, ImageTk
-import io
+import threading
+import time
+from collections import defaultdict
+import logging
+import platform
+import os
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 class StatisticsDashboard:
-    """Statistics dashboard showing protocol distribution and traffic patterns."""
+    """Dashboard for displaying network statistics."""
     
-    def __init__(self, parent, packet_capture):
-        """Initialize the statistics dashboard."""
+    def __init__(self, parent):
         self.parent = parent
-        self.packet_capture = packet_capture
-        self.running = True
         
-        # Create GUI
-        self.create_dashboard()
+        # Create main frame
+        self.frame = ttk.Frame(parent)
+        self.frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-    def create_dashboard(self):
-        """Create the dashboard GUI."""
-        # Main frame
-        self.frame = ttk.Frame(self.parent, padding=10)
-        self.frame.pack(fill=tk.BOTH, expand=True)
+        # Split dashboard into sections
+        self.top_frame = ttk.Frame(self.frame)
+        self.top_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Create protocol distribution panel
-        self.create_protocol_panel()
+        # Top left - Protocol Distribution Chart
+        self.protocol_frame = ttk.LabelFrame(self.top_frame, text="Protocol Distribution")
+        self.protocol_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         
-        # Create protocol timeline panel
-        self.create_timeline_panel()
+        # Top right - Data Volume Chart
+        self.volume_frame = ttk.LabelFrame(self.top_frame, text="Data Volume Over Time")
+        self.volume_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
         
-        # Create top talkers panel
-        self.create_top_talkers_panel()
+        # Bottom frame - Detailed Stats
+        self.bottom_frame = ttk.LabelFrame(self.frame, text="Detailed Statistics")
+        self.bottom_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
         
-    def create_protocol_panel(self):
-        """Create protocol distribution visualization."""
-        protocol_frame = ttk.LabelFrame(self.frame, text="Protocol Distribution", padding=10)
-        protocol_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        # Set up charts
+        self.setup_protocol_chart()
+        self.setup_volume_chart()
+        self.setup_detailed_stats()
         
-        # Create matplotlib figure for the pie chart
-        self.protocol_fig = Figure(figsize=(6, 4), dpi=100)
-        self.protocol_ax = self.protocol_fig.add_subplot(111)
+        # Initial data
+        self.packet_data = []
+        self.last_update_time = time.time()
+        self.update_interval = 2.0
         
-        # Initial empty plot
-        self.protocol_ax.text(0.5, 0.5, "Start capturing packets to see protocol distribution", 
-                           ha='center', va='center', fontsize=12, color='gray')
-        self.protocol_ax.axis('off')
+        # State variables
+        self.is_updating = False
+        self.timestamps = []
+        self.packet_counts = []
+        self.data_volume = []
         
-        # Create canvas for matplotlib figure
-        self.protocol_canvas = FigureCanvasTkAgg(self.protocol_fig, master=protocol_frame)
+    def setup_protocol_chart(self):
+        """Set up protocol distribution chart."""
+        # Create figure for matplotlib chart
+        self.protocol_fig, self.protocol_ax = plt.subplots(figsize=(5, 4))
+        self.protocol_ax.set_title("Protocol Distribution")
+        
+        # Create canvas for figure
+        self.protocol_canvas = FigureCanvasTkAgg(self.protocol_fig, self.protocol_frame)
         self.protocol_canvas.draw()
-        self.protocol_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.protocol_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-    def create_timeline_panel(self):
-        """Create traffic timeline visualization."""
-        timeline_frame = ttk.LabelFrame(self.frame, text="Traffic Timeline", padding=10)
-        timeline_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+    def setup_volume_chart(self):
+        """Set up data volume chart."""
+        # Create figure for matplotlib chart
+        self.volume_fig, self.volume_ax = plt.subplots(figsize=(5, 4))
+        self.volume_ax.set_title("Data Volume Over Time")
+        self.volume_ax.set_xlabel("Time")
+        self.volume_ax.set_ylabel("Bytes")
         
-        # Create matplotlib figure for the timeline
-        self.timeline_fig = Figure(figsize=(6, 3), dpi=100)
-        self.timeline_ax = self.timeline_fig.add_subplot(111)
+        # Create canvas for figure
+        self.volume_canvas = FigureCanvasTkAgg(self.volume_fig, self.volume_frame)
+        self.volume_canvas.draw()
+        self.volume_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Initial empty plot
-        self.timeline_ax.text(0.5, 0.5, "Capture packets to see traffic patterns over time", 
-                           ha='center', va='center', fontsize=12, color='gray')
-        self.timeline_ax.axis('off')
+    def setup_detailed_stats(self):
+        """Set up detailed statistics table."""
+        # Create frame for table with scrollbar
+        table_frame = ttk.Frame(self.bottom_frame)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Create canvas for matplotlib figure
-        self.timeline_canvas = FigureCanvasTkAgg(self.timeline_fig, master=timeline_frame)
-        self.timeline_canvas.draw()
-        self.timeline_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
-    def create_top_talkers_panel(self):
-        """Create top talkers panel."""
-        talkers_frame = ttk.LabelFrame(self.frame, text="Top Network Participants", padding=10)
-        talkers_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Create a frame with two columns
-        columns_frame = ttk.Frame(talkers_frame)
-        columns_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Left column - Top Source IPs
-        sources_frame = ttk.LabelFrame(columns_frame, text="Top Source IPs", padding=10)
-        sources_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
-        
-        # Create treeview for source IPs
-        self.sources_tree = ttk.Treeview(
-            sources_frame,
-            columns=("IP", "Packets", "Bytes"),
+        # Create treeview for statistics table
+        columns = ("Statistic", "Value", "Details")
+        self.stats_tree = ttk.Treeview(
+            table_frame,
+            columns=columns,
             show="headings",
-            height=5
+            height=10
         )
         
         # Configure columns
-        self.sources_tree.heading("IP", text="IP Address")
-        self.sources_tree.heading("Packets", text="Packets")
-        self.sources_tree.heading("Bytes", text="Bytes")
+        self.stats_tree.heading("Statistic", text="Statistic")
+        self.stats_tree.heading("Value", text="Value")
+        self.stats_tree.heading("Details", text="Details")
         
-        self.sources_tree.column("IP", width=150)
-        self.sources_tree.column("Packets", width=80)
-        self.sources_tree.column("Bytes", width=80)
+        self.stats_tree.column("Statistic", width=200, anchor=tk.W)
+        self.stats_tree.column("Value", width=100, anchor=tk.E)
+        self.stats_tree.column("Details", width=400, anchor=tk.W)
         
-        # Add scrollbar
-        sources_scrollbar = ttk.Scrollbar(sources_frame, orient="vertical", command=self.sources_tree.yview)
-        sources_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.sources_tree.configure(yscrollcommand=sources_scrollbar.set)
+        # Add scrollbars
+        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.stats_tree.yview)
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.stats_tree.xview)
         
-        self.sources_tree.pack(fill=tk.BOTH, expand=True)
+        self.stats_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         
-        # Right column - Top Destination IPs
-        dests_frame = ttk.LabelFrame(columns_frame, text="Top Destination IPs", padding=10)
-        dests_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        # Position treeview and scrollbars
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.stats_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Create treeview for destination IPs
-        self.dests_tree = ttk.Treeview(
-            dests_frame,
-            columns=("IP", "Packets", "Bytes"),
-            show="headings",
-            height=5
-        )
+        # Add refresh button
+        refresh_frame = ttk.Frame(self.bottom_frame)
+        refresh_frame.pack(fill=tk.X, pady=(5, 0))
         
-        # Configure columns
-        self.dests_tree.heading("IP", text="IP Address")
-        self.dests_tree.heading("Packets", text="Packets")
-        self.dests_tree.heading("Bytes", text="Bytes")
-        
-        self.dests_tree.column("IP", width=150)
-        self.dests_tree.column("Packets", width=80)
-        self.dests_tree.column("Bytes", width=80)
-        
-        # Add scrollbar
-        dests_scrollbar = ttk.Scrollbar(dests_frame, orient="vertical", command=self.dests_tree.yview)
-        dests_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.dests_tree.configure(yscrollcommand=dests_scrollbar.set)
-        
-        self.dests_tree.pack(fill=tk.BOTH, expand=True)
-        
-        # Add update button
-        self.update_button = ttk.Button(
-            talkers_frame,
+        self.refresh_button = ttk.Button(
+            refresh_frame,
             text="Refresh Statistics",
-            command=self.update_dashboard
+            command=self.refresh_stats
         )
-        self.update_button.pack(pady=10)
+        self.refresh_button.pack(side=tk.RIGHT)
         
-    def update_dashboard(self):
-        """Update all dashboard elements with current data."""
-        self.update_protocol_chart()
-        self.update_timeline_chart()
-        self.update_top_talkers()
+        # Add timestamp label
+        self.timestamp_label = ttk.Label(
+            refresh_frame,
+            text="Last update: Never"
+        )
+        self.timestamp_label.pack(side=tk.LEFT)
         
-    def update_protocol_chart(self):
-        """Update the protocol distribution chart."""
-        # Get protocol statistics
-        protocol_stats = self.packet_capture.get_statistics()
-        
-        if not protocol_stats or sum(protocol_stats.values()) == 0:
-            # No data yet
-            self.protocol_ax.clear()
-            self.protocol_ax.text(0.5, 0.5, "No packet data available yet", 
-                               ha='center', va='center', fontsize=12, color='gray')
-            self.protocol_ax.axis('off')
-        else:
-            # Create pie chart
-            self.protocol_ax.clear()
-            
-            # Get labels and sizes
-            labels = list(protocol_stats.keys())
-            sizes = list(protocol_stats.values())
-            
-            # Define colors for each protocol
-            colors = {
-                'TCP': '#3498db',
-                'UDP': '#2ecc71',
-                'ICMP': '#e74c3c',
-                'ARP': '#f39c12',
-                'Other': '#95a5a6'
-            }
-            
-            # Get colors for the protocols in the data
-            pie_colors = [colors.get(label, '#9b59b6') for label in labels]
-            
-            # Create pie chart
-            wedges, texts, autotexts = self.protocol_ax.pie(
-                sizes, 
-                labels=labels, 
-                autopct='%1.1f%%',
-                startangle=90,
-                colors=pie_colors,
-                explode=[0.05] * len(sizes)  # Explode all slices
-            )
-            
-            # Style the text and autotext
-            for text in texts:
-                text.set_fontsize(10)
-            for autotext in autotexts:
-                autotext.set_fontsize(9)
-                autotext.set_fontweight('bold')
-                autotext.set_color('white')
-            
-            # Equal aspect ratio ensures that pie is drawn as a circle
-            self.protocol_ax.axis('equal')
-            
-            # Add title
-            self.protocol_ax.set_title(f"Protocol Distribution (Total: {sum(sizes)} packets)")
-            
-        # Update canvas
-        self.protocol_fig.tight_layout()
-        self.protocol_canvas.draw()
-        
-    def update_timeline_chart(self):
-        """Update the traffic timeline chart."""
-        packets = self.packet_capture.packets
-        
-        if not packets or len(packets) < 2:
-            # Not enough data yet
-            self.timeline_ax.clear()
-            self.timeline_ax.text(0.5, 0.5, "Capture more packets to see timeline", 
-                               ha='center', va='center', fontsize=12, color='gray')
-            self.timeline_ax.axis('off')
-        else:
-            # Create timeline chart
-            self.timeline_ax.clear()
-            
-            # Get packet times
-            packet_times = [p.time for p in packets]
-            min_time = min(packet_times)
-            
-            # Group by second
-            from collections import defaultdict
-            packets_by_time = defaultdict(int)
-            for p_time in packet_times:
-                # Round to nearest second
-                second = int(p_time - min_time)
-                packets_by_time[second] += 1
-                
-            # Sort by time
-            sorted_times = sorted(packets_by_time.items())
-            x_values = [t[0] for t in sorted_times]
-            y_values = [t[1] for t in sorted_times]
-            
-            # Plot the data
-            self.timeline_ax.plot(x_values, y_values, marker='o', linestyle='-', color='#3498db', linewidth=2, markersize=5)
-            
-            # Fill area under curve
-            self.timeline_ax.fill_between(x_values, y_values, color='#3498db', alpha=0.3)
-            
-            # Add grid
-            self.timeline_ax.grid(True, linestyle='--', alpha=0.7)
-            
-            # Set labels
-            self.timeline_ax.set_xlabel("Seconds elapsed")
-            self.timeline_ax.set_ylabel("Packets per second")
-            self.timeline_ax.set_title("Traffic Volume Over Time")
-            
-            # Ensure we have a non-zero y range
-            if max(y_values) == min(y_values):
-                self.timeline_ax.set_ylim(0, max(y_values) + 1)
-                
-        # Update canvas
-        self.timeline_fig.tight_layout()
-        self.timeline_canvas.draw()
-        
-    def update_top_talkers(self):
-        """Update the top talkers lists."""
-        packets = self.packet_capture.packets
-        
-        if not packets:
-            # No data yet, clear trees
-            for item in self.sources_tree.get_children():
-                self.sources_tree.delete(item)
-            for item in self.dests_tree.get_children():
-                self.dests_tree.delete(item)
+    def update_dashboard(self, packet_data, stats=None):
+        """Update dashboard with new packet data and stats."""
+        # Skip if already updating
+        if self.is_updating:
             return
-        
-        # Count packets and bytes by source IP
-        src_packets = {}
-        src_bytes = {}
-        
-        # Count packets and bytes by destination IP
-        dst_packets = {}
-        dst_bytes = {}
-        
-        # Analyze packets
-        for packet in packets:
-            if hasattr(packet, 'haslayer') and packet.haslayer('IP'):
-                # Get source IP
-                src_ip = packet['IP'].src
-                src_packets[src_ip] = src_packets.get(src_ip, 0) + 1
-                src_bytes[src_ip] = src_bytes.get(src_ip, 0) + len(packet)
-                
-                # Get destination IP
-                dst_ip = packet['IP'].dst
-                dst_packets[dst_ip] = dst_packets.get(dst_ip, 0) + 1
-                dst_bytes[dst_ip] = dst_bytes.get(dst_ip, 0) + len(packet)
-        
-        # Sort by packet count
-        top_sources = sorted(src_packets.items(), key=lambda x: x[1], reverse=True)[:10]
-        top_dests = sorted(dst_packets.items(), key=lambda x: x[1], reverse=True)[:10]
-        
-        # Update source IP tree
-        for item in self.sources_tree.get_children():
-            self.sources_tree.delete(item)
-        
-        for ip, count in top_sources:
-            self.sources_tree.insert("", "end", values=(ip, count, self._format_bytes(src_bytes[ip])))
-        
-        # Update destination IP tree
-        for item in self.dests_tree.get_children():
-            self.dests_tree.delete(item)
-        
-        for ip, count in top_dests:
-            self.dests_tree.insert("", "end", values=(ip, count, self._format_bytes(dst_bytes[ip])))
-    
-    def _format_bytes(self, bytes_count):
-        """Format bytes into KB/MB as appropriate."""
-        if bytes_count < 1024:
-            return f"{bytes_count} B"
-        elif bytes_count < 1024 * 1024:
-            return f"{bytes_count / 1024:.1f} KB"
-        else:
-            return f"{bytes_count / (1024 * 1024):.1f} MB"
             
-    def stop(self):
-        """Stop the dashboard."""
-        self.running = False
+        # Skip if no data
+        if not packet_data and not stats:
+            return
+            
+        # Skip updates that are too frequent
+        current_time = time.time()
+        if current_time - self.last_update_time < self.update_interval and len(packet_data) < 10:
+            return
+            
+        self.is_updating = True
+        self.last_update_time = current_time
+        self.packet_data = packet_data
+        
+        # Update charts and statistics in background threads
+        threading.Thread(target=self._update_protocol_chart, daemon=True).start()
+        threading.Thread(target=self._update_volume_chart, daemon=True).start()
+        threading.Thread(target=self._update_detailed_stats, args=(stats,), daemon=True).start()
+        
+        # Update timestamp
+        self.timestamp_label.config(
+            text=f"Last update: {time.strftime('%H:%M:%S', time.localtime(current_time))}"
+        )
+        
+    def _update_protocol_chart(self):
+        """Update protocol distribution chart."""
+        try:
+            # Count protocols
+            protocol_counts = defaultdict(int)
+            
+            for packet in self.packet_data:
+                protocol = packet.get('protocol', 'Unknown')
+                # Extract main protocol type
+                if ' ' in protocol:  # Handle protocols like "TCP (HTTP)"
+                    base_protocol = protocol.split(' ')[0]
+                    protocol_counts[base_protocol] += 1
+                else:
+                    protocol_counts[protocol] += 1
+                    
+            # Simplify protocol list if there are too many
+            if len(protocol_counts) > 6:
+                simplified_counts = defaultdict(int)
+                for protocol, count in protocol_counts.items():
+                    if protocol in ["TCP", "UDP", "ICMP", "ARP", "DNS"]:
+                        simplified_counts[protocol] += count
+                    else:
+                        simplified_counts["Other"] += count
+                        
+                protocol_counts = simplified_counts
+                
+            # Sort by count
+            sorted_protocols = sorted(protocol_counts.items(), key=lambda x: x[1], reverse=True)
+            protocols = [p[0] for p in sorted_protocols]
+            counts = [p[1] for p in sorted_protocols]
+            
+            # Clear the plot
+            self.protocol_ax.clear()
+            
+            # Plot data as pie chart if we have data
+            if sum(counts) > 0:
+                # Calculate percentages for labels
+                total = sum(counts)
+                percentages = [(count / total) * 100 for count in counts]
+                labels = [f"{p} ({c} - {p:.1f}%)" for p, c, p in zip(protocols, counts, percentages)]
+                
+                # Create pie chart
+                self.protocol_ax.pie(
+                    counts, 
+                    labels=labels if len(labels) <= 6 else None,  # Only show labels if not too many
+                    autopct='%1.1f%%' if len(labels) <= 6 else None,
+                    startangle=140,
+                    shadow=False
+                )
+                self.protocol_ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
+                
+                # Add legend if many protocols
+                if len(labels) > 6:
+                    self.protocol_ax.legend(labels, loc="center left", bbox_to_anchor=(1, 0, 0.5, 1))
+                    
+                self.protocol_ax.set_title("Protocol Distribution")
+            else:
+                self.protocol_ax.text(
+                    0.5, 0.5, 
+                    "No data available", 
+                    horizontalalignment='center',
+                    verticalalignment='center',
+                    transform=self.protocol_ax.transAxes
+                )
+                
+            # Update canvas
+            self.protocol_canvas.draw_idle()
+            
+        except Exception as e:
+            logger.error(f"Error updating protocol chart: {e}")
+            
+        finally:
+            self.is_updating = False
+            
+    def _update_volume_chart(self):
+        """Update data volume chart."""
+        try:
+            # If we have new data, add to time series with actual timestamps
+            current_time = time.strftime('%H:%M:%S')
+            
+            # Get time window (last 5 seconds)
+            window_size = 5.0
+            current_timestamp = time.time()
+            window_start = current_timestamp - window_size
+            
+            # Count packets and bytes in the window
+            recent_packets = [p for p in self.packet_data if p.get('time', 0) >= window_start]
+            total_bytes = sum(p.get('length', 0) for p in recent_packets)
+            
+            # Add to time series
+            self.timestamps.append(current_time)
+            self.data_volume.append(total_bytes)
+            
+            # Keep only last 10 points
+            if len(self.timestamps) > 10:
+                self.timestamps = self.timestamps[-10:]
+                self.data_volume = self.data_volume[-10:]
+                
+            # Clear the plot
+            self.volume_ax.clear()
+            
+            # Plot time series
+            if len(self.timestamps) > 1:
+                self.volume_ax.plot(self.timestamps, self.data_volume, marker='o')
+                self.volume_ax.set_xlabel('Time')
+                self.volume_ax.set_ylabel('Data Volume (bytes)')
+                self.volume_ax.set_title('Data Volume Over Time')
+                self.volume_ax.tick_params(axis='x', rotation=45)
+                self.volume_ax.grid(True)
+                
+                # Format y-axis with units
+                self.volume_ax.ticklabel_format(style='plain', axis='y')
+                
+                # Ensure plot is properly laid out
+                self.volume_fig.tight_layout()
+            else:
+                self.volume_ax.text(
+                    0.5, 0.5, 
+                    "Collecting data...", 
+                    horizontalalignment='center',
+                    verticalalignment='center',
+                    transform=self.volume_ax.transAxes
+                )
+                
+            # Update canvas
+            self.volume_canvas.draw_idle()
+            
+        except Exception as e:
+            logger.error(f"Error updating volume chart: {e}")
+            
+    def _update_detailed_stats(self, stats=None):
+        """Update detailed statistics table."""
+        try:
+            # Clear existing items
+            for item in self.stats_tree.get_children():
+                self.stats_tree.delete(item)
+                
+            # Calculate basic statistics
+            total_packets = len(self.packet_data)
+            
+            if total_packets == 0:
+                self.stats_tree.insert("", "end", values=("No Data", "", "No packets captured yet"))
+                return
+                
+            # Add basic statistics
+            self.stats_tree.insert("", "end", values=(
+                "Total Packets", 
+                str(total_packets),
+                "Total number of packets captured or loaded"
+            ))
+            
+            # Protocol distribution
+            protocol_counts = defaultdict(int)
+            for packet in self.packet_data:
+                protocol = packet.get('protocol', 'Unknown')
+                if ' ' in protocol:
+                    base_protocol = protocol.split(' ')[0]
+                    protocol_counts[base_protocol] += 1
+                else:
+                    protocol_counts[protocol] += 1
+                    
+            # Add protocol statistics
+            for protocol, count in sorted(protocol_counts.items(), key=lambda x: x[1], reverse=True):
+                percentage = (count / total_packets) * 100 if total_packets > 0 else 0
+                self.stats_tree.insert("", "end", values=(
+                    f"{protocol} Packets",
+                    f"{count} ({percentage:.1f}%)",
+                    f"Number of {protocol} packets captured"
+                ))
+                
+            # Add data volume statistics
+            total_bytes = sum(p.get('length', 0) for p in self.packet_data)
+            avg_packet_size = total_bytes / total_packets if total_packets > 0 else 0
+            
+            self.stats_tree.insert("", "end", values=(
+                "Total Data Volume",
+                f"{total_bytes} bytes",
+                f"Total data volume of all packets ({self._format_bytes(total_bytes)})"
+            ))
+            
+            self.stats_tree.insert("", "end", values=(
+                "Average Packet Size",
+                f"{avg_packet_size:.1f} bytes",
+                "Average size of individual packets"
+            ))
+            
+            # Add time statistics if available
+            if stats and stats.get('duration'):
+                duration = stats.get('duration', 0)
+                packets_per_sec = stats.get('rate', 0)
+                
+                self.stats_tree.insert("", "end", values=(
+                    "Capture Duration",
+                    f"{duration:.2f} seconds",
+                    f"Total duration of packet capture ({duration/60:.1f} minutes)"
+                ))
+                
+                self.stats_tree.insert("", "end", values=(
+                    "Packet Rate",
+                    f"{packets_per_sec:.2f} packets/sec",
+                    "Average number of packets captured per second"
+                ))
+                
+                bytes_per_sec = total_bytes / duration if duration > 0 else 0
+                self.stats_tree.insert("", "end", values=(
+                    "Data Rate",
+                    f"{bytes_per_sec:.2f} bytes/sec",
+                    f"Average data throughput ({self._format_bytes(bytes_per_sec)}/sec)"
+                ))
+                
+            # Add source/destination statistics
+            src_ips = defaultdict(int)
+            dst_ips = defaultdict(int)
+            
+            for packet in self.packet_data:
+                src = packet.get('src', 'Unknown')
+                dst = packet.get('dst', 'Unknown')
+                src_ips[src] += 1
+                dst_ips[dst] += 1
+                
+            # Add top sources
+            top_sources = sorted(src_ips.items(), key=lambda x: x[1], reverse=True)[:5]
+            src_details = ", ".join([f"{ip}: {count}" for ip, count in top_sources])
+            
+            self.stats_tree.insert("", "end", values=(
+                "Top Source IPs",
+                f"{len(src_ips)} unique",
+                f"Top 5: {src_details}"
+            ))
+            
+            # Add top destinations
+            top_dests = sorted(dst_ips.items(), key=lambda x: x[1], reverse=True)[:5]
+            dst_details = ", ".join([f"{ip}: {count}" for ip, count in top_dests])
+            
+            self.stats_tree.insert("", "end", values=(
+                "Top Destination IPs",
+                f"{len(dst_ips)} unique",
+                f"Top 5: {dst_details}"
+            ))
+            
+        except Exception as e:
+            logger.error(f"Error updating detailed stats: {e}")
+            
+    def _format_bytes(self, size_bytes):
+        """Format bytes as KB, MB, GB, etc."""
+        if size_bytes < 1024:
+            return f"{size_bytes} bytes"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes/1024:.2f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes/(1024*1024):.2f} MB"
+        else:
+            return f"{size_bytes/(1024*1024*1024):.2f} GB"
+            
+    def refresh_stats(self):
+        """Manually refresh statistics."""
+        if self.packet_data:
+            self.timestamp_label.config(text="Refreshing...")
+            threading.Thread(target=self._update_protocol_chart, daemon=True).start()
+            threading.Thread(target=self._update_volume_chart, daemon=True).start()
+            threading.Thread(target=self._update_detailed_stats, daemon=True).start()
+            
+            # Update timestamp
+            current_time = time.time()
+            self.timestamp_label.config(
+                text=f"Last update: {time.strftime('%H:%M:%S', time.localtime(current_time))}"
+            )
+        else:
+            self.timestamp_label.config(text="No data available")

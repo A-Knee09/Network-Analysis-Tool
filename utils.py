@@ -147,4 +147,3 @@ def send_email(report_file, recipient, subject="Network Analysis Report"):
         return True
     except Exception as e:
         return str(e)
-

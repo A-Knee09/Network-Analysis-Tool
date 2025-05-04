@@ -1,545 +1,438 @@
-"""
-Network Dashboard - Real-time visualization of network health and status
-"""
-
 import tkinter as tk
 from tkinter import ttk
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.animation as animation
-from matplotlib.figure import Figure
-import numpy as np
-import random
 import time
 import threading
-from PIL import Image, ImageTk
+import logging
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas as pd
+import tempfile
+import webbrowser
+import os
+import matplotlib
+matplotlib.use('Agg')  # Use Agg backend to avoid GUI issues
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from collections import defaultdict
+import json
+import random
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 class NetworkDashboard:
-    """Network dashboard showing real-time health metrics and status visualization."""
+    """Dashboard showing network traffic visualization and health."""
     
-    def __init__(self, parent, packet_capture):
-        """Initialize the network dashboard."""
+    def __init__(self, parent):
         self.parent = parent
-        self.packet_capture = packet_capture
-        self.last_update = time.time()
-        self.update_interval = 1.0  # Update every second
         
-        # Initial health metrics
-        self.health_score = 85  # Initial score
-        self.latency = 25  # ms
-        self.packet_loss = 0.2  # %
-        self.throughput = 1.2  # Mbps
-        self.error_rate = 0.5  # %
+        # Create main frame
+        self.frame = ttk.Frame(parent)
+        self.frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Health history for graph
-        self.health_history = [self.health_score] * 30
-        self.timestamps = list(range(30))
+        # Split into top and bottom sections
+        self.top_frame = ttk.Frame(self.frame)
+        self.top_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Alert history
-        self.alerts = []
+        # Top split into left and right
+        self.left_frame = ttk.LabelFrame(self.top_frame, text="Network Traffic Overview")
+        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         
-        # Create GUI
-        self.create_dashboard()
+        self.right_frame = ttk.LabelFrame(self.top_frame, text="Network Health")
+        self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
         
-        # Start update thread
-        self.running = True
-        self.update_thread = threading.Thread(target=self.update_metrics_thread, daemon=True)
-        self.update_thread.start()
+        # Bottom section for protocol summary
+        self.bottom_frame = ttk.LabelFrame(self.frame, text="Protocol Summary")
+        self.bottom_frame.pack(fill=tk.BOTH, expand=True)
         
-    def create_dashboard(self):
-        """Create the dashboard GUI."""
-        # Main frame
-        self.frame = ttk.Frame(self.parent, padding=10)
-        self.frame.pack(fill=tk.BOTH, expand=True)
+        # Set up each section
+        self.setup_traffic_overview()
+        self.setup_network_health()
+        self.setup_traffic_flow()
         
-        # Create top panel with health score
-        self.create_health_panel()
+        # Initialize data
+        self.packet_data = []
+        self.last_update_time = time.time()
+        self.update_interval = 2.0  # seconds
         
-        # Create metrics panel
-        self.create_metrics_panel()
+        # Last update info
+        self.last_update_label = ttk.Label(self.frame, text="Last update: Never")
+        self.last_update_label.pack(side=tk.RIGHT, padx=5, pady=5)
         
-        # Create health history graph
-        self.create_health_graph()
+    def setup_traffic_overview(self):
+        """Set up traffic overview chart."""
+        # Create frame for matplotlib figure
+        self.fig_frame = ttk.Frame(self.left_frame)
+        self.fig_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Create network alerts panel
-        self.create_alerts_panel()
+        # Create initial figure
+        self.traffic_fig, self.traffic_ax = plt.subplots(figsize=(5, 4))
+        self.traffic_ax.set_title("Protocol Distribution")
+        self.traffic_ax.set_ylabel("Packet Count")
         
-    def create_health_panel(self):
-        """Create the health score indicator panel."""
-        health_frame = ttk.LabelFrame(self.frame, text="Network Health Score", padding=10)
-        health_frame.pack(fill=tk.X, pady=(0, 10))
+        # Create canvas for figure
+        self.traffic_canvas = FigureCanvasTkAgg(self.traffic_fig, self.fig_frame)
+        self.traffic_canvas.draw()
+        self.traffic_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         
-        # Health score display
-        score_frame = ttk.Frame(health_frame)
-        score_frame.pack(side=tk.LEFT, padx=10)
+        # Add navigation toolbar
+        self.traffic_toolbar = NavigationToolbar2Tk(self.traffic_canvas, self.fig_frame)
+        self.traffic_toolbar.update()
         
-        self.health_var = tk.StringVar(value=str(self.health_score))
-        self.health_label = ttk.Label(
-            score_frame,
-            textvariable=self.health_var,
-            font=("Segoe UI", 36, "bold"),
-            foreground=self._get_health_color(self.health_score)
+    def setup_network_health(self):
+        """Set up network health indicators."""
+        # Create gauge indicators for network health
+        self.health_canvas_frame = ttk.Frame(self.right_frame)
+        self.health_canvas_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Create health metrics frame
+        self.metrics_frame = ttk.Frame(self.health_canvas_frame)
+        self.metrics_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Create health metrics with labels and progress bars
+        self.health_metrics = {}
+        
+        metrics = [
+            ("traffic_rate", "Traffic Rate", "Normal"),
+            ("tcp_pct", "TCP Traffic %", "Normal"),
+            ("udp_pct", "UDP Traffic %", "Normal"),
+            ("error_rate", "Error Rate", "Low")
+        ]
+        
+        for i, (key, label, status) in enumerate(metrics):
+            metric_frame = ttk.Frame(self.metrics_frame)
+            metric_frame.pack(fill=tk.X, pady=5)
+            
+            # Label
+            ttk.Label(metric_frame, text=label, width=15).pack(side=tk.LEFT)
+            
+            # Progress bar
+            progress = ttk.Progressbar(
+                metric_frame, 
+                mode="determinate", 
+                length=200,
+                value=0
+            )
+            progress.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+            
+            # Status label
+            status_label = ttk.Label(metric_frame, text=status, width=10)
+            status_label.pack(side=tk.LEFT)
+            
+            self.health_metrics[key] = {
+                "progress": progress,
+                "status": status_label
+            }
+            
+        # Add refresh button
+        self.refresh_button = ttk.Button(
+            self.health_canvas_frame,
+            text="Refresh Health Data",
+            command=self.refresh_health_data
         )
-        self.health_label.pack()
+        self.refresh_button.pack(pady=10)
+        
+    def setup_traffic_flow(self):
+        """Set up protocol summary table."""
+        # Create frame for the table
+        self.summary_frame = ttk.Frame(self.bottom_frame)
+        self.summary_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Create treeview for the summary table
+        columns = ("protocol", "count", "percentage", "avg_size")
+        self.protocol_tree = ttk.Treeview(self.summary_frame, columns=columns, show="headings")
+        
+        # Configure columns
+        self.protocol_tree.heading("protocol", text="Protocol")
+        self.protocol_tree.heading("count", text="Packet Count")
+        self.protocol_tree.heading("percentage", text="Percentage")
+        self.protocol_tree.heading("avg_size", text="Avg Size (bytes)")
+        
+        self.protocol_tree.column("protocol", width=100)
+        self.protocol_tree.column("count", width=100, anchor="center")
+        self.protocol_tree.column("percentage", width=100, anchor="center")
+        self.protocol_tree.column("avg_size", width=120, anchor="center")
+        
+        # Add scrollbar
+        scrollbar = ttk.Scrollbar(self.summary_frame, orient=tk.VERTICAL, command=self.protocol_tree.yview)
+        self.protocol_tree.configure(yscroll=scrollbar.set)
+        
+        # Pack the widgets
+        self.protocol_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Add initial placeholder data
+        self.protocol_tree.insert("", "end", values=("No data", "", "", ""))
+        
+        # Add information label
+        infoframe = ttk.Frame(self.bottom_frame)
+        infoframe.pack(fill=tk.X, padx=10)
         
         ttk.Label(
-            score_frame,
-            text="/100",
-            font=("Segoe UI", 12)
-        ).pack()
+            infoframe, 
+            text="This table shows a summary of the protocols in the captured packets.",
+            font=("Segoe UI", 9, "italic")
+        ).pack(pady=(0, 5), anchor=tk.W)
         
-        # Status description
-        status_frame = ttk.Frame(health_frame)
-        status_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=20)
+    def update_dashboard(self, packet_data):
+        """Update dashboard with new packet data."""
+        # Skip updates that are too frequent
+        current_time = time.time()
+        if current_time - self.last_update_time < self.update_interval and len(packet_data) < 10:
+            return
+            
+        self.last_update_time = current_time
+        self.packet_data = packet_data
         
-        self.status_var = tk.StringVar(value=self._get_health_description(self.health_score))
-        status_label = ttk.Label(
-            status_frame,
-            textvariable=self.status_var,
-            font=("Segoe UI", 12, "bold"),
-            wraplength=400
+        # Use threading to avoid blocking UI
+        threading.Thread(target=self._update_traffic_overview, daemon=True).start()
+        threading.Thread(target=self._update_network_health, daemon=True).start()
+        threading.Thread(target=self._update_traffic_flow, daemon=True).start()
+        
+        # Update last update time
+        self.last_update_label.config(
+            text=f"Last update: {time.strftime('%H:%M:%S', time.localtime(current_time))}"
         )
-        status_label.pack(anchor=tk.W)
         
-        self.status_detail_var = tk.StringVar(value="Your network is performing well with low latency and minimal packet loss.")
-        status_detail = ttk.Label(
-            status_frame,
-            textvariable=self.status_detail_var,
-            wraplength=400
-        )
-        status_detail.pack(anchor=tk.W, pady=(5, 0))
-        
-        # Visual indicator
-        indicator_frame = ttk.Frame(health_frame)
-        indicator_frame.pack(side=tk.RIGHT, padx=10)
-        
-        self.indicator_canvas = tk.Canvas(indicator_frame, width=80, height=80, highlightthickness=0)
-        self.indicator_canvas.pack()
-        
-        # Create initial indicator
-        self.update_health_indicator(self.health_score)
-        
-    def create_metrics_panel(self):
-        """Create the network metrics panel."""
-        metrics_frame = ttk.LabelFrame(self.frame, text="Network Metrics", padding=10)
-        metrics_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Create 2x2 grid of metrics
-        metrics_grid = ttk.Frame(metrics_frame)
-        metrics_grid.pack(fill=tk.X)
-        
-        # Define metrics as a dictionary
-        self.metrics = {
-            'latency': {
-                "name": "Latency", 
-                "value": self.latency, 
-                "unit": "ms", 
-                "var": tk.StringVar(), 
-                "ideal": "< 50",
-                "good": 50,  # threshold for good performance
-                "label": None
-            },
-            'packet_loss': {
-                "name": "Packet Loss", 
-                "value": self.packet_loss, 
-                "unit": "%", 
-                "var": tk.StringVar(), 
-                "ideal": "< 1.0",
-                "good": 1.0,
-                "label": None
-            },
-            'throughput': {
-                "name": "Throughput", 
-                "value": self.throughput, 
-                "unit": "Mbps", 
-                "var": tk.StringVar(), 
-                "ideal": "> 1.0",
-                "good": 1.0,
-                "label": None
-            },
-            'error_rate': {
-                "name": "Error Rate", 
-                "value": self.error_rate, 
-                "unit": "%", 
-                "var": tk.StringVar(), 
-                "ideal": "< 1.0",
-                "good": 1.0,
-                "label": None
-            }
-        }
-        
-        # Create metric tiles
-        metrics_list = list(self.metrics.items())
-        for i, (key, metric) in enumerate(metrics_list):
-            col = i % 2
-            row = i // 2
+    def _update_traffic_overview(self):
+        """Update traffic overview chart."""
+        try:
+            if not self.packet_data:
+                return
+                
+            # Count protocols
+            protocol_counts = defaultdict(int)
+            for packet in self.packet_data:
+                protocol = packet.get('protocol', 'Unknown')
+                if ' ' in protocol:  # Handle protocols like "TCP (HTTP)"
+                    base_protocol = protocol.split(' ')[0]
+                    protocol_counts[base_protocol] += 1
+                else:
+                    protocol_counts[protocol] += 1
+                    
+            # Create a simpler protocol list
+            simplified_counts = defaultdict(int)
+            for protocol, count in protocol_counts.items():
+                if "TCP" in protocol:
+                    simplified_counts["TCP"] += count
+                elif "UDP" in protocol:
+                    simplified_counts["UDP"] += count
+                elif "ICMP" in protocol:
+                    simplified_counts["ICMP"] += count
+                elif "ARP" in protocol:
+                    simplified_counts["ARP"] += count
+                else:
+                    simplified_counts["Other"] += count
+                    
+            # Plot data
+            self.traffic_ax.clear()
+            protocols = list(simplified_counts.keys())
+            counts = list(simplified_counts.values())
             
-            tile = ttk.Frame(metrics_grid, padding=10, relief="solid", borderwidth=1)
-            tile.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
+            # Set colors
+            colors = ['#3498db', '#2ecc71', '#e74c3c', '#f39c12', '#9b59b6']
             
-            # Set initial value
-            metric["var"].set(f"{metric['value']:.1f}{metric['unit']}")
+            bars = self.traffic_ax.bar(protocols, counts, color=colors[:len(protocols)])
+            self.traffic_ax.set_title("Protocol Distribution")
+            self.traffic_ax.set_ylabel("Packet Count")
             
-            # Metric name
-            ttk.Label(
-                tile,
-                text=metric["name"],
-                font=("Segoe UI", 11, "bold")
-            ).pack(anchor=tk.W)
+            # Add count labels above bars
+            for bar in bars:
+                height = bar.get_height()
+                self.traffic_ax.text(
+                    bar.get_x() + bar.get_width()/2., height + 0.1,
+                    f"{int(height)}",
+                    ha='center', va='bottom',
+                    fontsize=9
+                )
+                
+            # Update canvas
+            self.traffic_canvas.draw()
             
-            # Metric value
-            value_label = ttk.Label(
-                tile,
-                textvariable=metric["var"],
-                font=("Segoe UI", 14)
-            )
-            value_label.pack(anchor=tk.W, pady=(5, 0))
+        except Exception as e:
+            logger.error(f"Error updating traffic overview: {e}")
             
-            # Store reference to update later
-            metric["label"] = value_label
+    def _update_network_health(self):
+        """Update network health indicators with real data."""
+        try:
+            if not self.packet_data:
+                return
+                
+            # Calculate metrics from packet data
+            packet_count = len(self.packet_data)
             
-            # Ideal range
-            ttk.Label(
-                tile,
-                text=f"Ideal: {metric['ideal']}",
-                font=("Segoe UI", 9),
-                foreground="#707070"
-            ).pack(anchor=tk.W, pady=(5, 0))
-        
-        # Configure grid
-        metrics_grid.columnconfigure(0, weight=1)
-        metrics_grid.columnconfigure(1, weight=1)
-        
-    def create_health_graph(self):
-        """Create a graph showing health score history."""
-        graph_frame = ttk.LabelFrame(self.frame, text="Health History", padding=10)
-        graph_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        
-        # Create matplotlib figure
-        self.fig = Figure(figsize=(5, 2), dpi=100)
-        self.ax = self.fig.add_subplot(111)
-        
-        # Create canvas first
-        self.canvas = FigureCanvasTkAgg(self.fig, master=graph_frame)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
-        # Then plot health history
-        self.plot_health_history()
-        
-    def create_alerts_panel(self):
-        """Create network alerts panel."""
-        alerts_frame = ttk.LabelFrame(self.frame, text="Network Alerts", padding=10)
-        alerts_frame.pack(fill=tk.X)
-        
-        # Create alerts list with scrollbar
-        alerts_container = ttk.Frame(alerts_frame)
-        alerts_container.pack(fill=tk.BOTH, expand=True)
-        
-        self.alerts_text = tk.Text(
-            alerts_container,
-            height=4,
-            wrap=tk.WORD,
-            state=tk.DISABLED
-        )
-        self.alerts_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        scrollbar = ttk.Scrollbar(alerts_container, command=self.alerts_text.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.alerts_text.config(yscrollcommand=scrollbar.set)
-        
-        # Add sample alert
-        self.add_alert("Network monitoring started")
-        
-    def update_metrics_thread(self):
-        """Background thread to update metrics periodically."""
-        while self.running:
-            time.sleep(0.1)  # Short sleep to prevent high CPU usage
-            
+            # Get current time for rate calculation
             current_time = time.time()
-            if current_time - self.last_update >= self.update_interval:
-                self.last_update = current_time
-                
-                # Generate new metrics from packet capture data
-                self.calculate_new_metrics()
-                
-                # Schedule GUI update on the main thread
-                self.parent.after(0, self.update_dashboard)
-                
-    def calculate_new_metrics(self):
-        """Calculate new network metrics based on captured data."""
-        # Get stats from packet capture
-        stats = self.packet_capture.get_capture_stats()
-        
-        if stats:
-            # Calculate metrics
             
-            # Simulated latency calculation (would use real ICMP times in production)
-            # In a real implementation, you would calculate actual response times from packets
-            packet_count = stats.get('packets', 0)
+            # Calculate time window (last 5 seconds)
+            time_window = 5.0
+            window_start = current_time - time_window
             
-            # This is a demo implementation - in reality, you'd calculate these from actual packet data
-            # Base values on packet count for the demo
-            if packet_count > 0:
-                # Adjust latency based on packet rate (simulated)
-                packet_rate = stats.get('rate', 0)
-                if packet_rate > 0:
-                    # Higher packet rate generally means more network activity
-                    # which could affect latency in unpredictable ways
-                    self.latency = 15 + (random.random() * 10) + (packet_rate * 0.5)
-                    
-                    # More packets might indicate higher throughput
-                    self.throughput = 1.0 + (packet_rate * 0.2) + (random.random() * 0.5)
-                    
-                    # Packet loss calculation would usually be done by tracking sequence numbers
-                    # Here we just simulate based on activity
-                    self.packet_loss = 0.1 + (random.random() * 0.3)
-                    if packet_rate > 10:  # Higher traffic can sometimes lead to more packet loss
-                        self.packet_loss += random.random() * 0.5
-                        
-                    # Error rate - in reality this would come from packet checksums, retransmissions, etc.
-                    self.error_rate = 0.2 + (random.random() * 0.6)
-                    
-                    # Calculate health score based on metrics
-                    latency_score = max(0, 100 - (self.latency * 1.5))  # Lower latency is better
-                    loss_score = max(0, 100 - (self.packet_loss * 20))  # Lower packet loss is better
-                    throughput_score = min(100, self.throughput * 20)   # Higher throughput is better
-                    error_score = max(0, 100 - (self.error_rate * 30))  # Lower error rate is better
-                    
-                    # Overall health score - weighted average
-                    self.health_score = int(0.35 * latency_score + 
-                                        0.25 * loss_score + 
-                                        0.15 * throughput_score + 
-                                        0.25 * error_score)
-                    
-                    # Add to history
-                    self.health_history.append(self.health_score)
-                    self.health_history = self.health_history[-30:]  # Keep only last 30 values
-                    
-                    # Generate alerts based on new metrics
-                    self.check_for_alerts()
-        
-    def update_dashboard(self):
-        """Update all dashboard elements with new metrics."""
-        # Update health score
-        self.health_var.set(str(self.health_score))
-        self.health_label.config(foreground=self._get_health_color(self.health_score))
-        
-        # Update status description
-        self.status_var.set(self._get_health_description(self.health_score))
-        detail_text = self._get_status_detail()
-        self.status_detail_var.set(detail_text)
-        
-        # Update health indicator
-        self.update_health_indicator(self.health_score)
-        
-        # Update metrics - Using dictionary format for metrics
-        for key, value in {
-            'latency': self.latency,
-            'packet_loss': self.packet_loss,
-            'throughput': self.throughput,
-            'error_rate': self.error_rate
-        }.items():
-            if key in self.metrics:
-                metric = self.metrics[key]
-                metric['var'].set(f"{value:.1f}{metric['unit']}")
-                
-                # Set color based on threshold
-                if key == 'throughput':
-                    good = value >= metric['good']
+            # Count packets in the window
+            recent_packets = [p for p in self.packet_data if p.get('time', 0) >= window_start]
+            recent_count = len(recent_packets)
+            
+            # Calculate packets per second
+            packets_per_second = recent_count / time_window if time_window > 0 else 0
+            
+            # Traffic rate - normalize to 0-100 scale (assuming 100 packets/sec is high traffic)
+            max_pps = 100  # packets per second considered "high"
+            traffic_rate = min(100, (packets_per_second / max_pps) * 100)
+            
+            # Protocol percentages
+            protocol_counts = {"TCP": 0, "UDP": 0, "ICMP": 0, "ARP": 0, "Other": 0}
+            
+            for packet in self.packet_data:
+                protocol = packet.get('protocol', 'Unknown')
+                if "TCP" in protocol:
+                    protocol_counts["TCP"] += 1
+                elif "UDP" in protocol:
+                    protocol_counts["UDP"] += 1
+                elif "ICMP" in protocol:
+                    protocol_counts["ICMP"] += 1
+                elif "ARP" in protocol:
+                    protocol_counts["ARP"] += 1
                 else:
-                    good = value <= metric['good']
+                    protocol_counts["Other"] += 1
+            
+            # Calculate TCP and UDP percentages
+            tcp_pct = (protocol_counts["TCP"] / max(1, packet_count)) * 100
+            udp_pct = (protocol_counts["UDP"] / max(1, packet_count)) * 100
+            
+            # Error rate - actual packet errors or retransmissions
+            # This would normally be from TCP retransmission analysis
+            error_packets = sum(1 for p in self.packet_data if "ICMP" in p.get('protocol', '') and "error" in p.get('protocol', '').lower())
+            error_rate = min(100, (error_packets / max(1, packet_count)) * 100)
+            
+            # Update progress bars
+            self._update_metric("traffic_rate", traffic_rate,
+                              "Low" if traffic_rate < 30 else "Normal" if traffic_rate < 70 else "High")
+                               
+            self._update_metric("tcp_pct", tcp_pct,
+                              "Low" if tcp_pct < 30 else "Normal" if tcp_pct < 70 else "High")
+                               
+            self._update_metric("udp_pct", udp_pct,
+                              "Low" if udp_pct < 30 else "Normal" if udp_pct < 70 else "High")
+                               
+            self._update_metric("error_rate", error_rate,
+                              "Low" if error_rate < 5 else "Moderate" if error_rate < 20 else "High")
                 
-                if good:
-                    metric['label'].config(foreground="#2ecc71")  # Green
+        except Exception as e:
+            logger.error(f"Error updating network health: {e}")
+            
+    def _update_metric(self, key, value, status_text):
+        """Update a health metric with value and status."""
+        if key in self.health_metrics:
+            metric = self.health_metrics[key]
+            metric["progress"]["value"] = value
+            metric["status"].config(text=status_text)
+            
+            # Update color based on value
+            if value < 30:  # Good
+                metric["status"].config(foreground="green")
+            elif value < 70:  # Warning
+                metric["status"].config(foreground="orange")
+            else:  # Critical
+                metric["status"].config(foreground="red")
+                
+    def _update_traffic_flow(self):
+        """Update protocol summary table."""
+        try:
+            if not self.packet_data:
+                return
+                
+            # Clear existing table rows
+            for item in self.protocol_tree.get_children():
+                self.protocol_tree.delete(item)
+                
+            # Count protocols and calculate statistics
+            protocol_stats = {}
+            packet_count = len(self.packet_data)
+            
+            for packet in self.packet_data:
+                protocol = packet.get('protocol', 'Unknown')
+                size = packet.get('size', 0)
+                
+                # Extract base protocol (TCP, UDP, etc.)
+                base_protocol = protocol
+                if ' ' in protocol:
+                    base_protocol = protocol.split(' ')[0]
+                
+                # Simplify to major protocols
+                if "TCP" in base_protocol:
+                    base_protocol = "TCP"
+                elif "UDP" in base_protocol:
+                    base_protocol = "UDP"
+                elif "ICMP" in base_protocol:
+                    base_protocol = "ICMP"
+                elif "ARP" in base_protocol:
+                    base_protocol = "ARP"
+                elif "DNS" in base_protocol:
+                    base_protocol = "DNS"
+                elif "HTTP" in base_protocol:
+                    base_protocol = "HTTP"
                 else:
-                    metric['label'].config(foreground="#e74c3c")  # Red
-        
-        # Update graph
-        self.plot_health_history()
-        
-    def update_health_indicator(self, score):
-        """Update the visual health indicator."""
-        # Clear canvas
-        self.indicator_canvas.delete("all")
-        
-        # Parameters
-        width = 80
-        height = 80
-        center_x = width // 2
-        center_y = height // 2
-        radius = 30
-        
-        # Draw outer circle
-        self.indicator_canvas.create_oval(
-            center_x - radius - 2, center_y - radius - 2,
-            center_x + radius + 2, center_y + radius + 2,
-            width=2, outline="#d0d0d0"
-        )
-        
-        # Draw background circle
-        self.indicator_canvas.create_oval(
-            center_x - radius, center_y - radius,
-            center_x + radius, center_y + radius,
-            fill="#f5f5f5", outline=""
-        )
-        
-        # Get color based on health score
-        color = self._get_health_color(score)
-        
-        # Calculate arc extent
-        extent = score * 3.6  # Convert score (0-100) to degrees (0-360)
-        
-        # Draw score arc
-        self.indicator_canvas.create_arc(
-            center_x - radius, center_y - radius,
-            center_x + radius, center_y + radius,
-            start=90, extent=-extent,  # Start from top, go clockwise
-            style=tk.PIESLICE,
-            fill=color,
-            outline=""
-        )
-        
-        # Draw inner circle (for donut effect)
-        inner_radius = radius * 0.7
-        self.indicator_canvas.create_oval(
-            center_x - inner_radius, center_y - inner_radius,
-            center_x + inner_radius, center_y + inner_radius,
-            fill="#ffffff", outline=""
-        )
-        
-        # Draw score text
-        self.indicator_canvas.create_text(
-            center_x, center_y,
-            text=str(score),
-            font=("Segoe UI", 14, "bold"),
-            fill=color
-        )
-        
-    def plot_health_history(self):
-        """Update the health history graph."""
-        self.ax.clear()
-        
-        # Plot the health history
-        x = list(range(len(self.health_history)))
-        y = self.health_history
-        
-        # Create gradient fill under the curve
-        cmap = plt.get_cmap('YlGn')
-        colors = [cmap(0.2 + (0.8 * (val / 100))) for val in y]
-        
-        # Plot line
-        self.ax.plot(x, y, color='#2ecc71', linewidth=2)
-        
-        # Fill under the curve with gradient
-        for i in range(len(x) - 1):
-            self.ax.fill_between([x[i], x[i+1]], [0, 0], [y[i], y[i+1]], color=colors[i], alpha=0.7)
-        
-        # Set y axis range
-        self.ax.set_ylim(0, 100)
-        
-        # Remove axes spines
-        for spine in self.ax.spines.values():
-            spine.set_visible(False)
+                    base_protocol = "Other"
+                
+                # Update statistics
+                if base_protocol in protocol_stats:
+                    protocol_stats[base_protocol]['count'] += 1
+                    protocol_stats[base_protocol]['size'] += size
+                else:
+                    protocol_stats[base_protocol] = {'count': 1, 'size': size}
             
-        # Add horizontal gridlines
-        self.ax.grid(axis='y', linestyle='--', alpha=0.7)
-        
-        # Set background color
-        self.ax.set_facecolor('#f9f9f9')
-        
-        # Remove ticks
-        self.ax.set_xticks([])
-        
-        # Add y-axis label on right side
-        self.ax.yaxis.set_label_position("right")
-        self.ax.set_ylabel("Health Score")
-        
-        # Draw horizontal threshold lines
-        self.ax.axhline(y=70, color='#f39c12', linestyle='--', alpha=0.5)
-        self.ax.axhline(y=50, color='#e74c3c', linestyle='--', alpha=0.5)
-        
-        # Update canvas
-        self.fig.tight_layout()
-        self.canvas.draw()
-        
-    def add_alert(self, message):
-        """Add an alert message to the alerts panel."""
-        timestamp = time.strftime("%H:%M:%S")
-        alert = f"[{timestamp}] {message}\n"
-        
-        # Add to alerts list
-        self.alerts.append(alert)
-        self.alerts = self.alerts[-10:]  # Keep only last 10 alerts
-        
-        # Update text widget
-        self.alerts_text.config(state=tk.NORMAL)
-        self.alerts_text.delete(1.0, tk.END)
-        for a in self.alerts:
-            self.alerts_text.insert(tk.END, a)
-        self.alerts_text.config(state=tk.DISABLED)
-        self.alerts_text.see(tk.END)  # Scroll to bottom
-        
-    def check_for_alerts(self):
-        """Check metrics for alert conditions."""
-        # High latency alert
-        if self.latency > 40 and random.random() < 0.3:
-            self.add_alert(f"High latency detected: {self.latency:.1f}ms")
+            # Sort protocols by count (descending)
+            sorted_protocols = sorted(
+                protocol_stats.items(), 
+                key=lambda x: x[1]['count'], 
+                reverse=True
+            )
             
-        # Packet loss alert
-        if self.packet_loss > 1.0 and random.random() < 0.4:
-            self.add_alert(f"Elevated packet loss: {self.packet_loss:.1f}%")
+            # Add rows to the table
+            for protocol, stats in sorted_protocols:
+                count = stats['count']
+                percentage = (count / packet_count) * 100 if packet_count > 0 else 0
+                avg_size = stats['size'] / count if count > 0 else 0
+                
+                self.protocol_tree.insert(
+                    "", "end", 
+                    values=(
+                        protocol, 
+                        f"{count:,}", 
+                        f"{percentage:.1f}%", 
+                        f"{avg_size:.1f}"
+                    )
+                )
             
-        # Low throughput alert
-        if self.throughput < 1.0 and random.random() < 0.3:
-            self.add_alert(f"Low network throughput: {self.throughput:.1f} Mbps")
+            # Add a "Total" row
+            self.protocol_tree.insert(
+                "", "end",
+                values=(
+                    "TOTAL", 
+                    f"{packet_count:,}", 
+                    "100.0%", 
+                    f"{sum(p.get('size', 0) for p in self.packet_data) / packet_count:.1f}" if packet_count > 0 else "0.0"
+                ),
+                tags=("total",)
+            )
             
-        # Health score alerts
-        if self.health_score < 50 and random.random() < 0.5:
-            self.add_alert("Network health is critical - investigation recommended")
-        elif self.health_score < 70 and random.random() < 0.3:
-            self.add_alert("Network health is degraded - monitor closely")
+            # Highlight the total row
+            self.protocol_tree.tag_configure("total", background="#e0e0e0", font=("Segoe UI", 9, "bold"))
+                
+        except Exception as e:
+            logger.error(f"Error updating protocol summary: {e}")
+            # Make sure we see something
+            self.protocol_tree.insert("", "end", values=("Error updating table", "", "", ""))
             
-    def _get_health_color(self, score):
-        """Get a color based on health score."""
-        if score >= 80:
-            return "#2ecc71"  # Green
-        elif score >= 60:
-            return "#f39c12"  # Orange
-        else:
-            return "#e74c3c"  # Red
+    def refresh_health_data(self):
+        """Manually refresh health data."""
+        if self.packet_data:
+            threading.Thread(target=self._update_network_health, daemon=True).start()
+            threading.Thread(target=self._update_traffic_flow, daemon=True).start()
             
-    def _get_health_description(self, score):
-        """Get a description of the health score."""
-        if score >= 80:
-            return "Network Healthy"
-        elif score >= 60:
-            return "Network Performance Degraded"
-        else:
-            return "Network Performance Critical"
-            
-    def _get_status_detail(self):
-        """Get detailed status description based on current metrics."""
-        details = []
-        
-        if self.latency > 40:
-            details.append("high latency")
-        if self.packet_loss > 1.0:
-            details.append("packet loss")
-        if self.throughput < 1.0:
-            details.append("low throughput")
-        if self.error_rate > 1.0:
-            details.append("transmission errors")
-            
-        if details:
-            issues = ", ".join(details)
-            return f"Network is experiencing issues with {issues}. This may affect application performance."
-        else:
-            return "Your network is performing well with low latency and minimal packet loss."
-            
-    # This duplicate method has been removed to avoid confusion
-        
-    def stop(self):
-        """Stop the update thread."""
-        self.running = False
-        if self.update_thread.is_alive():
-            self.update_thread.join(1.0)  # Wait for thread to terminate
+            # Update last update time
+            current_time = time.time()
+            self.last_update_label.config(
+                text=f"Last update: {time.strftime('%H:%M:%S', time.localtime(current_time))}"
+            )
