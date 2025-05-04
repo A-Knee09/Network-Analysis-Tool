@@ -15,6 +15,7 @@ gunicorn==23.0.0
 idna==3.10
 itsdangerous==2.2.0
 Jinja2==3.1.6
+kaleido==0.2.1
 kamene==0.32
 kiwisolver==1.4.8
 MarkupSafe==3.0.2
