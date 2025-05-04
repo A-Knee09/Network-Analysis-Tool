@@ -52,7 +52,7 @@ The application requires Python 3.8+ and several dependencies. Follow these step
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/network-analysis-tool.git
+git clone https://github.com/A-Knee09/network-analysis-tool.git
 cd network-analysis-tool
 ```
 
