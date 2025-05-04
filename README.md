@@ -43,6 +43,9 @@ A comprehensive network traffic analysis and monitoring toolkit developed as a f
 
 ## Installation
 
+>[!IMPORTANT]
+>Make sure you have admin permission to run this , in windows open the cmd as admin and for linux use sudo
+
 The application requires Python 3.8+ and several dependencies. Follow these steps to set up the environment:
 
 ### Clone the Repository
@@ -159,8 +162,6 @@ sudo venv/bin/python3 main.py  # For linux , and for windows run it in admin mod
     <td align="center">Dark Mode</td>
   </tr>
 </table>
-
-Note: These are placeholder image references. Replace them with actual screenshots from your application.
 
 ## Development Notes
 
